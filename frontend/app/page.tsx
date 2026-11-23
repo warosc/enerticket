@@ -1,0 +1,22 @@
+"use client";
+import {useEffect,useState} from 'react';
+import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer} from 'recharts';
+type Ticket={id:number,title:string,description:string,status:string,priority:string,department:string,requester:string,assignee:string|null};
+const API=process.env.NEXT_PUBLIC_API_URL||'http://localhost:8000';
+const statuses=['new','triage','assigned','in_progress','pending','resolved','closed'];
+export default function Home(){
+ const [tickets,setTickets]=useState<Ticket[]>([]);const [title,setTitle]=useState('');const [description,setDescription]=useState('');const [department,setDepartment]=useState('Telecomunicaciones');const [priority,setPriority]=useState('medium');const [error,setError]=useState('');
+ async function refresh(){try{const r=await fetch(API+'/tickets');if(!r.ok)throw Error('API no disponible');setTickets(await r.json());setError('')}catch(e){setError(String(e))}}
+ useEffect(()=>{refresh()},[]);
+ async function create(e:React.FormEvent){e.preventDefault();const r=await fetch(API+'/tickets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,description,department,priority})});if(!r.ok){setError('No se pudo crear el ticket');return}setTitle('');setDescription('');refresh()}
+ async function move(id:number,status:string){const r=await fetch(API+'/tickets/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});if(!r.ok){setError('No se pudo actualizar el estado');return}refresh()}
+ const counts=statuses.map(status=>({status,count:tickets.filter(t=>t.status===status).length}));
+ return <main style={{maxWidth:1350,margin:'auto',padding:28}}><header style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><h1 style={{marginBottom:4}}>Energuate Service Desk</h1><p style={{color:'#536579'}}>Portal corporativo · MVP de desarrollo</p></div><strong>Tickets: {tickets.length}</strong></header>
+ {error&&<p role="alert" style={{color:'#b42318'}}>{error}</p>}
+ <section style={{display:'grid',gridTemplateColumns:'minmax(260px,1fr) 2fr',gap:20,marginTop:25}}><form onSubmit={create} style={panel}><h2>Nuevo ticket</h2><label>Título<input required minLength={3} value={title} onChange={e=>setTitle(e.target.value)} style={field}/></label><label>Descripción<textarea value={description} onChange={e=>setDescription(e.target.value)} style={field}/></label><label>Unidad<select value={department} onChange={e=>setDepartment(e.target.value)} style={field}>{['Telecomunicaciones','Seguridad de Redes','Ciberseguridad / SOC','Riesgo y Cumplimiento','Proyectos TI','General'].map(x=><option key={x}>{x}</option>)}</select></label><label>Prioridad<select value={priority} onChange={e=>setPriority(e.target.value)} style={field}>{['low','medium','high','critical'].map(x=><option key={x}>{x}</option>)}</select></label><button style={button}>Crear ticket</button></form><div style={panel}><h2>Indicadores por estado</h2><div style={{height:260}}><ResponsiveContainer width="100%" height="100%"><BarChart data={counts}><XAxis dataKey="status" tick={{fontSize:10}}/><YAxis allowDecimals={false}/><Tooltip/><Bar dataKey="count" fill="#1765aa"/></BarChart></ResponsiveContainer></div></div></section>
+ <section style={{...panel,marginTop:20}}><h2>Tickets registrados</h2><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',textAlign:'left'}}><thead><tr>{['ID','Título','Unidad','Prioridad','Estado','Acción'].map(x=><th key={x} style={cell}>{x}</th>)}</tr></thead><tbody>{tickets.map(t=><tr key={t.id}><td style={cell}>ESD-{t.id}</td><td style={cell}>{t.title}</td><td style={cell}>{t.department}</td><td style={cell}>{t.priority}</td><td style={cell}>{t.status}</td><td style={cell}><select value={t.status} onChange={e=>move(t.id,e.target.value)}>{statuses.map(s=><option key={s} value={s}>{s}</option>)}</select></td></tr>)}</tbody></table>{tickets.length===0&&<p>No hay tickets todavía.</p>}</div></section></main>
+}
+const panel:React.CSSProperties={background:'white',padding:24,borderRadius:12,boxShadow:'0 2px 12px #182b4112'};
+const field:React.CSSProperties={display:'block',width:'100%',boxSizing:'border-box',padding:10,margin:'7px 0 16px',border:'1px solid #cbd5e1',borderRadius:6};
+const cell:React.CSSProperties={padding:12,borderBottom:'1px solid #e2e8f0'};
+const button:React.CSSProperties={background:'#125fa3',color:'white',border:0,borderRadius:6,padding:'12px 18px',cursor:'pointer'};
