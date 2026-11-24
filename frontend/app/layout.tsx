@@ -1,3 +1,29 @@
+import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-export const metadata = { title: 'Energuate Service Desk', description: 'Gestión corporativa de tickets' };
-export default function RootLayout({children}:{children:ReactNode}) {return <html lang="es"><body style={{margin:0,fontFamily:'Arial, sans-serif',background:'#f3f6fa',color:'#14243a'}}>{children}</body></html>;}
+import AppShell from '@/components/AppShell';
+import { AuthProvider } from '@/lib/auth';
+import './globals.css';
+
+export const metadata: Metadata = {
+  title: { default: 'Energuate Service Desk', template: '%s · Energuate Service Desk' },
+  description: 'Portal corporativo de gestión de tickets de Energuate.',
+  robots: { index: false, follow: false },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: '#0e2a4a',
+};
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="es">
+      <body>
+        <AuthProvider>
+          <AppShell>{children}</AppShell>
+        </AuthProvider>
+      </body>
+    </html>
+  );
+}

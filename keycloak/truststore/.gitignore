@@ -1,0 +1,4 @@
+# Certificados de CA corporativa (no se versionan). Ver docs/AD_INTEGRATION.md.
+*
+!.gitignore
+!README.md

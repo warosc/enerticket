@@ -1,22 +1,246 @@
-"use client";
-import {useEffect,useState} from 'react';
-import {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer} from 'recharts';
-type Ticket={id:number,title:string,description:string,status:string,priority:string,department:string,requester:string,assignee:string|null};
-const API=process.env.NEXT_PUBLIC_API_URL||'http://localhost:8000';
-const statuses=['new','triage','assigned','in_progress','pending','resolved','closed'];
-export default function Home(){
- const [tickets,setTickets]=useState<Ticket[]>([]);const [title,setTitle]=useState('');const [description,setDescription]=useState('');const [department,setDepartment]=useState('Telecomunicaciones');const [priority,setPriority]=useState('medium');const [error,setError]=useState('');
- async function refresh(){try{const r=await fetch(API+'/tickets');if(!r.ok)throw Error('API no disponible');setTickets(await r.json());setError('')}catch(e){setError(String(e))}}
- useEffect(()=>{refresh()},[]);
- async function create(e:React.FormEvent){e.preventDefault();const r=await fetch(API+'/tickets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,description,department,priority})});if(!r.ok){setError('No se pudo crear el ticket');return}setTitle('');setDescription('');refresh()}
- async function move(id:number,status:string){const r=await fetch(API+'/tickets/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});if(!r.ok){setError('No se pudo actualizar el estado');return}refresh()}
- const counts=statuses.map(status=>({status,count:tickets.filter(t=>t.status===status).length}));
- return <main style={{maxWidth:1350,margin:'auto',padding:28}}><header style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><h1 style={{marginBottom:4}}>Energuate Service Desk</h1><p style={{color:'#536579'}}>Portal corporativo · MVP de desarrollo</p></div><strong>Tickets: {tickets.length}</strong></header>
- {error&&<p role="alert" style={{color:'#b42318'}}>{error}</p>}
- <section style={{display:'grid',gridTemplateColumns:'minmax(260px,1fr) 2fr',gap:20,marginTop:25}}><form onSubmit={create} style={panel}><h2>Nuevo ticket</h2><label>Título<input required minLength={3} value={title} onChange={e=>setTitle(e.target.value)} style={field}/></label><label>Descripción<textarea value={description} onChange={e=>setDescription(e.target.value)} style={field}/></label><label>Unidad<select value={department} onChange={e=>setDepartment(e.target.value)} style={field}>{['Telecomunicaciones','Seguridad de Redes','Ciberseguridad / SOC','Riesgo y Cumplimiento','Proyectos TI','General'].map(x=><option key={x}>{x}</option>)}</select></label><label>Prioridad<select value={priority} onChange={e=>setPriority(e.target.value)} style={field}>{['low','medium','high','critical'].map(x=><option key={x}>{x}</option>)}</select></label><button style={button}>Crear ticket</button></form><div style={panel}><h2>Indicadores por estado</h2><div style={{height:260}}><ResponsiveContainer width="100%" height="100%"><BarChart data={counts}><XAxis dataKey="status" tick={{fontSize:10}}/><YAxis allowDecimals={false}/><Tooltip/><Bar dataKey="count" fill="#1765aa"/></BarChart></ResponsiveContainer></div></div></section>
- <section style={{...panel,marginTop:20}}><h2>Tickets registrados</h2><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',textAlign:'left'}}><thead><tr>{['ID','Título','Unidad','Prioridad','Estado','Acción'].map(x=><th key={x} style={cell}>{x}</th>)}</tr></thead><tbody>{tickets.map(t=><tr key={t.id}><td style={cell}>ESD-{t.id}</td><td style={cell}>{t.title}</td><td style={cell}>{t.department}</td><td style={cell}>{t.priority}</td><td style={cell}>{t.status}</td><td style={cell}><select value={t.status} onChange={e=>move(t.id,e.target.value)}>{statuses.map(s=><option key={s} value={s}>{s}</option>)}</select></td></tr>)}</tbody></table>{tickets.length===0&&<p>No hay tickets todavía.</p>}</div></section></main>
+'use client';
+
+import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import CountBarChart, { type CountDatum } from '@/components/dashboard/CountBarChart';
+import { Icon } from '@/components/icons';
+import SlaBadge from '@/components/ticket/SlaBadge';
+import { EmptyState, ErrorAlert, Loading, PageHeader, PriorityBadge, StatusBadge } from '@/components/ui';
+import { ApiError, apiFetch, errorMessage } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
+import { formatNumber, formatRelative } from '@/lib/format';
+import { useCatalog } from '@/lib/hooks';
+import { useTicketEvents } from '@/lib/realtime';
+import type { Catalog, TicketOut, TicketPage, TicketStats } from '@/lib/types';
+
+interface DashboardData {
+  stats: TicketStats;
+  criticalOpen: number;
+  mine: number;
+  assignedToMe: number | null;
+  recent: TicketOut[];
 }
-const panel:React.CSSProperties={background:'white',padding:24,borderRadius:12,boxShadow:'0 2px 12px #182b4112'};
-const field:React.CSSProperties={display:'block',width:'100%',boxSizing:'border-box',padding:10,margin:'7px 0 16px',border:'1px solid #cbd5e1',borderRadius:6};
-const cell:React.CSSProperties={padding:12,borderBottom:'1px solid #e2e8f0'};
-const button:React.CSSProperties={background:'#125fa3',color:'white',border:0,borderRadius:6,padding:'12px 18px',cursor:'pointer'};
+
+async function countTickets(query: Record<string, string | number | boolean>): Promise<number> {
+  const page = await apiFetch<TicketPage>('/tickets', { query: { ...query, page: 1, page_size: 1 } });
+  return page.total;
+}
+
+/** Usa /stats si existe; si no, cuenta con /tickets por estado y prioridad. */
+async function loadStats(catalog: Catalog): Promise<TicketStats> {
+  try {
+    return await apiFetch<TicketStats>('/stats');
+  } catch (e) {
+    if (!(e instanceof ApiError) || e.status !== 404) throw e;
+  }
+  const states = catalog.workflow.states;
+  const [total, stateCounts, priorityCounts] = await Promise.all([
+    countTickets({}),
+    Promise.all(states.map((s) => countTickets({ status: s.key }))),
+    Promise.all(catalog.priorities.map((p) => countTickets({ priority: p.key }))),
+  ]);
+  const by_status: Record<string, number> = {};
+  const by_category: TicketStats['by_category'] = {};
+  states.forEach((s, i) => {
+    by_status[s.key] = stateCounts[i];
+    by_category[s.category] = (by_category[s.category] ?? 0) + stateCounts[i];
+  });
+  const by_priority: Record<string, number> = {};
+  catalog.priorities.forEach((p, i) => {
+    by_priority[p.key] = priorityCounts[i];
+  });
+  return { total, by_status, by_priority, by_category };
+}
+
+export default function DashboardPage() {
+  const { user, isAgent } = useAuth();
+  const { catalog, error: catalogError, reload: reloadCatalog } = useCatalog();
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const requestId = useRef(0);
+
+  const openStateKeys = useMemo(
+    () => (catalog ? catalog.workflow.states.filter((s) => s.category !== 'done').map((s) => s.key) : []),
+    [catalog],
+  );
+
+  const load = useCallback(
+    async (silent = false) => {
+      if (!catalog || !user) return;
+      const id = ++requestId.current;
+      if (!silent) setLoading(true);
+      try {
+        const openKeys = openStateKeys.join(',');
+        const [stats, criticalOpen, mine, assignedToMe, recent] = await Promise.all([
+          loadStats(catalog),
+          countTickets({ priority: 'critical', status: openKeys }),
+          countTickets({ mine: true, status: openKeys }),
+          isAgent ? countTickets({ assignee_id: user.id, status: openKeys }) : Promise.resolve(null),
+          apiFetch<TicketPage>('/tickets', { query: { page: 1, page_size: 8, sort: '-updated_at' } }),
+        ]);
+        if (id !== requestId.current) return;
+        setData({ stats, criticalOpen, mine, assignedToMe, recent: recent.items });
+        setError(null);
+      } catch (e) {
+        if (id === requestId.current) setError(`No se pudieron cargar los indicadores: ${errorMessage(e)}`);
+      } finally {
+        if (id === requestId.current) setLoading(false);
+      }
+    },
+    [catalog, user, isAgent, openStateKeys],
+  );
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // Refresco con retardo ante eventos en tiempo real (agrupa ráfagas de eventos).
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useTicketEvents(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => void load(true), 1500);
+  });
+  useEffect(
+    () => () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    },
+    [],
+  );
+
+  const stateData: CountDatum[] = useMemo(() => {
+    if (!catalog || !data) return [];
+    return [...catalog.workflow.states]
+      .sort((a, b) => a.order - b.order)
+      .map((s) => ({ key: s.key, label: s.name, count: data.stats.by_status[s.key] ?? 0 }));
+  }, [catalog, data]);
+
+  const priorityData: CountDatum[] = useMemo(() => {
+    if (!catalog || !data) return [];
+    return [...catalog.priorities]
+      .sort((a, b) => a.rank - b.rank)
+      .map((p) => ({ key: p.key, label: p.name, count: data.stats.by_priority[p.key] ?? 0 }));
+  }, [catalog, data]);
+
+  const byCategory = data?.stats.by_category ?? {};
+  const openCount = (byCategory.todo ?? 0) + (byCategory.in_progress ?? 0) + (byCategory.waiting ?? 0);
+
+  return (
+    <div className="page">
+      <PageHeader
+        title="Dashboard"
+        subtitle={user ? `Bienvenido, ${user.display_name || user.username}. Resumen de los tickets que puede ver.` : undefined}
+        actions={
+          <>
+            <button type="button" className="btn" onClick={() => void load()} disabled={loading}>
+              <Icon name="refresh" width={14} height={14} />
+              Actualizar
+            </button>
+            <Link href="/tickets?new=1" className="btn btn-primary">
+              <Icon name="plus" width={14} height={14} />
+              Nuevo ticket
+            </Link>
+          </>
+        }
+      />
+
+      <ErrorAlert error={catalogError} onRetry={() => void reloadCatalog()} />
+      <ErrorAlert error={error} onRetry={() => void load()} />
+
+      {loading && !data ? (
+        <Loading label="Cargando indicadores…" />
+      ) : data ? (
+        <>
+          <section className="grid-auto" aria-label="Indicadores clave">
+            <Kpi label="Tickets visibles" value={data.stats.total} accent="primary" />
+            <Kpi label="Abiertos" value={openCount} accent="neutral" sub="Por atender, en curso y en espera" />
+            <Kpi label="En espera" value={byCategory.waiting ?? 0} accent="warning" />
+            <Kpi label="Críticos abiertos" value={data.criticalOpen} accent="danger" />
+            <Kpi label="Finalizados" value={byCategory.done ?? 0} accent="success" sub="Resueltos y cerrados" />
+            {data.assignedToMe !== null ? (
+              <Kpi label="Asignados a mí" value={data.assignedToMe} accent="primary" sub="Abiertos" />
+            ) : (
+              <Kpi label="Mis tickets abiertos" value={data.mine} accent="primary" />
+            )}
+          </section>
+
+          <div className="grid-2">
+            <CountBarChart title="Tickets por estado" subtitle="Según el flujo de trabajo" data={stateData} />
+            <CountBarChart title="Tickets por prioridad" subtitle="Todas las categorías de estado" data={priorityData} />
+          </div>
+
+          <section className="panel panel-flush">
+            <div className="panel-header">
+              <h2 className="panel-title">Actividad reciente</h2>
+              <Link href="/tickets" className="btn btn-ghost btn-sm">
+                Ver todos
+              </Link>
+            </div>
+            {data.recent.length === 0 ? (
+              <EmptyState title="No hay tickets todavía">Cree el primero desde «Nuevo ticket».</EmptyState>
+            ) : (
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Clave</th>
+                      <th scope="col">Título</th>
+                      <th scope="col">Estado</th>
+                      <th scope="col">Prioridad</th>
+                      <th scope="col">SLA</th>
+                      <th scope="col">Actualizado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.recent.map((t) => (
+                      <tr key={t.id}>
+                        <td className="col-key">
+                          <Link href={`/tickets/${t.id}`}>{t.key}</Link>
+                        </td>
+                        <td className="col-title">
+                          <Link href={`/tickets/${t.id}`} style={{ color: 'inherit' }}>
+                            {t.title}
+                          </Link>
+                        </td>
+                        <td>
+                          <StatusBadge status={t.status} />
+                        </td>
+                        <td>
+                          <PriorityBadge priority={t.priority} />
+                        </td>
+                        <td>
+                          <SlaBadge ticket={t} />
+                        </td>
+                        <td className="nowrap muted">{formatRelative(t.updated_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function Kpi({
+  label,
+  value,
+  sub,
+  accent,
+}: {
+  label: string;
+  value: number;
+  sub?: string;
+  accent: 'primary' | 'warning' | 'success' | 'danger' | 'neutral';
+}) {
+  return (
+    <div className={`kpi kpi-accent-${accent}`}>
+      <span className="kpi-label">{label}</span>
+      <span className="kpi-value">{formatNumber(value)}</span>
+      {sub && <span className="kpi-sub">{sub}</span>}
+    </div>
+  );
+}
