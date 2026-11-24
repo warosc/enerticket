@@ -354,6 +354,17 @@ def _find_transition(session: Session, ticket: Ticket, to_state_key: str) -> Wor
     return transition
 
 
+def _resolves(session: Session, transition: WorkflowTransition) -> bool:
+    """True si la transición entra en un estado ``done`` desde uno que no lo es."""
+    source = session.get(WorkflowState, transition.from_state_id)
+    target = session.get(WorkflowState, transition.to_state_id)
+    return (
+        target is not None
+        and target.category == "done"
+        and (source is None or source.category != "done")
+    )
+
+
 def execute_action(
     session: Session, action: dict[str, Any], ticket: Ticket, context: RuleContext
 ) -> str:
@@ -396,12 +407,20 @@ def execute_action(
     if kind in ("transition", "request_approval"):
         to_state = spec.to_state or ""
         transition = _find_transition(session, ticket, to_state)
+        # Solución opcional (plantilla) para transiciones que resuelven el ticket.
+        # No reemplaza una solución ya escrita por el agente.
+        auto_note: str | None = None
+        if spec.body and not (ticket.resolution_note or "").strip() and _resolves(session, transition):
+            auto_note = render_template(spec.body, context).strip()[:4000] or None
         plan = approvals.resolve_plan(session, ticket, transition)
         if kind == "request_approval" and plan is None:
             plan = approvals.ApprovalPlan(
                 None, [approvals.StepSpec(**s) for s in approvals.DEFAULT_STEPS]
             )
         if plan is not None and approvals.usable_approval(session, ticket, transition.id) is None:
+            if auto_note:
+                # Se guarda ya para que la transición aprobada encuentre la solución.
+                ticket.resolution_note = auto_note
             request, created = approvals.ensure_request(
                 session,
                 ticket,
@@ -425,6 +444,7 @@ def execute_action(
             to_state,
             None,
             extra_guard_data={approvals.INLINE_FLAG: True},
+            resolution_note=auto_note,
         )
         return f"Estado cambiado a {to_state}"
 

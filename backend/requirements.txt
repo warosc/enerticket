@@ -19,3 +19,5 @@ python-multipart==0.0.20
 boto3==1.36.26
 tzdata==2025.1
 holidays==0.66
+# Exportación .xlsx del generador de reportes.
+openpyxl==3.1.5

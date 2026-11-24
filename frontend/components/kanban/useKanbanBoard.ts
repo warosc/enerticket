@@ -106,6 +106,10 @@ export interface KanbanBoardState {
   reload: (options?: { silent?: boolean }) => void;
   loadMore: (stateKey: string) => void;
   moveTicket: (ticket: TicketOut, toStateKey: string) => Promise<void>;
+  /** Coloca un ticket actualizado fuera de `moveTicket` (p.ej. tras el diálogo de solución). */
+  applyTicket: (updated: TicketOut, message?: string) => void;
+  /** Muestra un aviso en el tablero. */
+  notify: (tone: NoticeTone, text: string, href?: string) => void;
   dismissNotice: (id: number) => void;
   lastLiveUpdate: number | null;
 }
@@ -437,6 +441,16 @@ export function useKanbanBoard({
     [workflow, me, isAgent, notify, refreshTicket],
   );
 
+  const applyTicket = useCallback(
+    (updated: TicketOut, message?: string) => {
+      setColumns((prev) =>
+        matchesFilters(updated, filtersRef.current, meRef.current) ? place(prev, updated) : removeFrom(prev, updated.id),
+      );
+      if (message) notify('success', message);
+    },
+    [notify],
+  );
+
   return {
     columns,
     states,
@@ -446,6 +460,8 @@ export function useKanbanBoard({
     reload,
     loadMore,
     moveTicket,
+    applyTicket,
+    notify,
     dismissNotice,
     lastLiveUpdate,
   };

@@ -6,6 +6,8 @@
  * - Contador de no leídas (GET /notifications/unread-count), actualizado en tiempo real con
  *   `useTicketEvents` (evento `notification.created` dirigido al usuario) y, como respaldo,
  *   cada 60 s y al volver a la pestaña.
+ * - Administradores: aviso de valores de departamento del AD pendientes de asignar (evento
+ *   `catalog.alias_pending`, ticket_id=0) con enlace a Administración → Valores del AD.
  * - Desplegable con las últimas notificaciones, filtro "No leídas", marcar como leída al
  *   abrir una notificación y "Marcar todas como leídas".
  */
@@ -16,6 +18,7 @@ import styles from '@/components/notifications/notifications.module.css';
 import { Spinner } from '@/components/ui';
 import { errorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { catalogApi } from '@/lib/catalog';
 import {
   getUnreadCount,
   listNotifications,
@@ -49,7 +52,7 @@ function iconFor(notification: AppNotification) {
 }
 
 export default function NotificationBell() {
-  const { user, authenticated } = useAuth();
+  const { user, authenticated, isAdmin } = useAuth();
   const router = useRouter();
   const panelId = useId();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -65,6 +68,17 @@ export default function NotificationBell() {
   const [busy, setBusy] = useState(false);
 
   const enabled = authenticated && Boolean(user);
+  const [pendingAliases, setPendingAliases] = useState(0);
+
+  const refreshAliases = useCallback(async () => {
+    if (!enabled || !isAdmin) return;
+    try {
+      const list = await catalogApi.aliases(true);
+      setPendingAliases(list.length);
+    } catch {
+      // Informativo: si falla se deja el valor anterior.
+    }
+  }, [enabled, isAdmin]);
 
   const refreshCount = useCallback(async () => {
     if (!enabled) return;
@@ -99,16 +113,20 @@ export default function NotificationBell() {
   useEffect(() => {
     if (!enabled) return;
     void refreshCount();
+    void refreshAliases();
     const id = window.setInterval(() => void refreshCount(), POLL_MS);
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void refreshCount();
+      if (document.visibilityState === 'visible') {
+        void refreshCount();
+        void refreshAliases();
+      }
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       window.clearInterval(id);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [enabled, refreshCount]);
+  }, [enabled, refreshCount, refreshAliases]);
 
   useEffect(() => {
     if (open) void loadList();
@@ -131,6 +149,12 @@ export default function NotificationBell() {
     [open, loadList, refreshCount, user],
   );
   useTicketEvents(onEvent, { types: ['notification.created', RESYNC_EVENT] });
+
+  // Tiempo real (solo administradores): nuevo valor de departamento del AD sin asignar.
+  const onAliasEvent = useCallback(() => {
+    if (isAdmin) void refreshAliases();
+  }, [isAdmin, refreshAliases]);
+  useTicketEvents(onAliasEvent, { types: ['catalog.alias_pending'] });
 
   // Cerrar con clic fuera o Escape.
   useEffect(() => {
@@ -186,7 +210,11 @@ export default function NotificationBell() {
 
   if (!enabled) return null;
 
-  const label = count > 0 ? `Notificaciones: ${count} sin leer` : 'Notificaciones';
+  const badge = count + pendingAliases;
+  const label =
+    badge > 0
+      ? `Notificaciones: ${count} sin leer${pendingAliases > 0 ? `, ${pendingAliases} valores del AD pendientes` : ''}`
+      : 'Notificaciones';
 
   return (
     <div className={styles.bell} ref={containerRef}>
@@ -202,9 +230,9 @@ export default function NotificationBell() {
         onClick={() => setOpen((v) => !v)}
       >
         <FlowIcon name="bell" width={20} height={20} />
-        {count > 0 && (
+        {badge > 0 && (
           <span className={styles.count} aria-hidden="true">
-            {count > 99 ? '99+' : count}
+            {badge > 99 ? '99+' : badge}
           </span>
         )}
       </button>
@@ -244,6 +272,29 @@ export default function NotificationBell() {
               No leídas{count > 0 ? ` (${count})` : ''}
             </button>
           </div>
+
+          {pendingAliases > 0 && (
+            <button
+              type="button"
+              className={`${styles.item} ${styles.unread}`}
+              onClick={() => {
+                setOpen(false);
+                router.push('/admin?tab=aliases');
+              }}
+            >
+              <span className={`${styles.icon} ${styles.iconWarning}`}>
+                <FlowIcon name="alert" width={16} height={16} />
+              </span>
+              <span className={styles.content}>
+                <span className={styles.title} style={{ display: 'block' }}>
+                  {pendingAliases === 1
+                    ? '1 valor de departamento del AD sin asignar'
+                    : `${pendingAliases} valores de departamento del AD sin asignar`}
+                </span>
+                <span className={styles.body}>Asígnelos a un departamento en Administración → Valores del AD.</span>
+              </span>
+            </button>
+          )}
 
           {error && (
             <div className="alert alert-error" role="alert" style={{ margin: 'var(--space-3) var(--space-4) 0' }}>

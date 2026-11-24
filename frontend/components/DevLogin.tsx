@@ -20,6 +20,7 @@ export default function DevLogin() {
   const [roles, setRoles] = useState<Role[]>(initial.roles.filter((r) => r !== 'requester'));
   const [groups, setGroups] = useState<string[]>(initial.groups);
   const [extraGroups, setExtraGroups] = useState('');
+  const [department, setDepartment] = useState(initial.department ?? '');
   const [formError, setFormError] = useState<string | null>(null);
 
   function applyPreset(preset: DevIdentity) {
@@ -28,6 +29,7 @@ export default function DevLogin() {
     setRoles(preset.roles.filter((r) => r !== 'requester'));
     setGroups(preset.groups);
     setExtraGroups('');
+    setDepartment(preset.department ?? '');
     setFormError(null);
   }
 
@@ -46,6 +48,7 @@ export default function DevLogin() {
       name: name.trim() || undefined,
       roles: roles.includes('requester') ? roles : [...roles, 'requester'],
       groups: Array.from(new Set([...groups, ...extra])),
+      department: department.trim() || undefined,
     };
     const problem = validateDevIdentity(identity);
     if (problem) {
@@ -172,6 +175,17 @@ export default function DevLogin() {
               onChange={(e) => setExtraGroups(e.target.value)}
               placeholder="Separados por punto y coma"
             />
+          </label>
+          <label className="field">
+            <span className="field-label">Departamento AD (opcional)</span>
+            <input
+              className="input"
+              value={department}
+              maxLength={200}
+              onChange={(e) => setDepartment(e.target.value)}
+              placeholder="p.ej. 07 COMERCIAL"
+            />
+            <span className="field-hint">Simula el atributo «department» del AD (cabecera X-Dev-Department).</span>
           </label>
         </fieldset>
 

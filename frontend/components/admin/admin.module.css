@@ -1,0 +1,217 @@
+/* Estilos de Administración del catálogo de servicio (Fase 3). Usa los tokens de app/globals.css. */
+
+/* ---------- Valores del AD pendientes ---------- */
+.pendingRow td {
+  background: var(--color-warning-soft);
+}
+.pendingRow td:first-child {
+  box-shadow: inset 3px 0 0 var(--color-warning);
+}
+@media (max-width: 640px) {
+  .pendingRow {
+    background: var(--color-warning-soft);
+    box-shadow: inset 3px 0 0 var(--color-warning);
+  }
+}
+
+.assignControl {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.assignControl select {
+  flex: 1 1 180px;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.countBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-warning);
+  color: var(--color-text-inverse);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ---------- Categorías ---------- */
+.categoryList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.categoryItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  min-width: 0;
+}
+.categoryItem:last-child {
+  border-bottom: 0;
+}
+.categoryItem.inactive {
+  background: var(--color-surface-alt);
+}
+.categoryItem.inactive .categoryName {
+  color: var(--color-text-muted);
+}
+.categoryHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.categoryName {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.categoryMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 4px;
+}
+.subList {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 var(--space-4);
+  border-left: 2px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.subItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: 4px 0;
+  font-size: var(--text-sm);
+  min-width: 0;
+}
+.subItem.inactive > .subName {
+  color: var(--color-text-subtle);
+  text-decoration: line-through;
+}
+.subName {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.inlineForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.inlineForm .input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.orderInput {
+  width: 90px;
+  flex: 0 0 90px;
+}
+@media (max-width: 640px) {
+  .categoryItem { padding: var(--space-3); }
+  .subList { padding-left: var(--space-3); }
+}
+
+/* ---------- Importación ---------- */
+.formatTable code {
+  font-size: var(--text-xs);
+}
+.fileRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-end;
+}
+.fileRow .field {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.fileInput {
+  max-width: 100%;
+  font-size: var(--text-sm);
+}
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+}
+.summaryItem {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--color-surface-alt);
+}
+.summaryValue {
+  font-size: var(--text-xl);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.summaryLabel {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+/* ---------- Usuarios con acceso a una gerencia ---------- */
+.viewerList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.viewerItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+.viewerName {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* ---------- Etiquetas (admiten nombres largos en móvil) ---------- */
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.tag {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}

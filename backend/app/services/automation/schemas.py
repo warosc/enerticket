@@ -183,8 +183,9 @@ class ActionIn(BaseModel):
             "assign_user": ("user_id",),
             "assign_team": ("team_id",),
             "set_priority": ("priority_key",),
-            "transition": ("to_state",),
-            "request_approval": ("to_state",),
+            # ``body`` en un cambio de estado = solución (si la transición resuelve el ticket).
+            "transition": ("to_state", "body"),
+            "request_approval": ("to_state", "body"),
             "add_comment": ("body", "visibility"),
             "notify": ("targets", "title", "body"),
         }[self.type]

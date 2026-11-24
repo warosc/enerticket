@@ -3,8 +3,10 @@
 Mesa de servicio interna de Energuate: tickets por área (Telecomunicaciones, Seguridad de Redes,
 Ciberseguridad / SOC, Riesgo y Cumplimiento, Proyectos TI, General), SLA con calendario hábil de
 Guatemala, tablero Kanban en tiempo real, aprobaciones, automatizaciones, notificaciones (aplicación
-y correo), adjuntos y reportes. La identidad se delega en **Keycloak**, federado en solo lectura con
-el **Active Directory de Energuate**.
+y correo), adjuntos, **catálogo de servicio** (departamento de atención → categoría → subcategoría,
+tipo Incidencia / Petición / Orden de trabajo) y un **generador de reportes** con plantillas y envío
+programado. La identidad se delega en **Keycloak**, federado en solo lectura con el **Active
+Directory de Energuate** (roles, equipos, departamento, gerencia y VIP).
 
 Stack: Next.js 15 · React 19 · TypeScript · FastAPI · SQLAlchemy 2 + Alembic · PostgreSQL 16 ·
 Redis 7 · Celery · Keycloak 26 · MinIO (S3) · Caddy 2 · Docker Compose.
@@ -14,12 +16,13 @@ Redis 7 · Celery · Keycloak 26 · MinIO (S3) · Caddy 2 · Docker Compose.
 | Documento | Contenido |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Servicios, redes, flujos de autenticación, eventos, WebSocket y SLA |
-| [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | Tablas y migraciones (core, SLA, flujos, adjuntos) |
-| [docs/AD_INTEGRATION.md](docs/AD_INTEGRATION.md) | Conexión con el AD real: cuenta de servicio, LDAPS, grupos → roles/equipos, diagnóstico |
+| [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | Tablas y migraciones (core, SLA, flujos, adjuntos, catálogo, reportes) |
+| [docs/AD_INTEGRATION.md](docs/AD_INTEGRATION.md) | Conexión con el AD real: cuenta de servicio, LDAPS, grupos → roles/equipos, departamento/gerencia/VIP, diagnóstico |
+| [docs/REPORTS.md](docs/REPORTS.md) | Guía de usuario: generador de reportes, plantillas, envío programado, alcance por rol e importación del catálogo (CSV) |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Requisitos, DNS/TLS, primer despliegue y checklist de go-live |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Copias, restauración, actualizaciones, rotación de secretos, logs, monitoreo, escalado |
 | [docs/SECURITY.md](docs/SECURITY.md) | Modelo de amenazas, controles y checklist de hardening |
-| [docs/FASE2_PLAN.md](docs/FASE2_PLAN.md) | Contrato técnico de desarrollo |
+| [docs/FASE2_PLAN.md](docs/FASE2_PLAN.md), [docs/FASE3_PLAN.md](docs/FASE3_PLAN.md) | Contratos técnicos de desarrollo (Fase 2 y Fase 3) |
 
 ## Entornos
 
@@ -50,6 +53,32 @@ Fase 2 completa e integrada (verificación de integración del 24-11-2026, stack
 
 Resultados: backend `pytest` 337/337, Alembic con una sola cabeza (`0001_core → 0004_attachments`,
 upgrade/downgrade/upgrade), frontend `tsc` y `next build` sin errores, E2E real 72/72.
+
+### Fase 3 — Catálogo de servicio y generador de reportes
+
+| Módulo | Contenido |
+|---|---|
+| Catálogo | Gerencias, departamentos de atención y solicitantes, categorías/subcategorías por departamento y tipo, proveedores, canal; importación CSV con vista previa ([docs/REPORTS.md](docs/REPORTS.md#7-catálogo-de-categorías-administradores)) |
+| Tickets | Tipos Incidencia / Petición / Orden de trabajo (Cambio y Problema quedan inactivos), clasificación obligatoria al resolver si el departamento tiene catálogo, **solución** obligatoria, horas hábiles de resolución, «Trasladar a orden de trabajo» |
+| Identidad | Claim `department` del AD → departamento (alias con normalización, pendientes para el administrador), gerencia del solicitante, VIP por `VIP_GROUP`, visores de gerencia (grupo AD o asignación manual) ([docs/AD_INTEGRATION.md](docs/AD_INTEGRATION.md#7-departamento-gerencia-y-vip-fase-3)) |
+| SLA | Políticas por categoría, subcategoría y «solo VIP»; gana siempre la más específica (subcategoría > categoría > general) |
+| Reportes | Generador (filas × columnas × métricas, secciones), exportación `.xlsx` con detalle, plantillas propias/compartidas/de fábrica (incluye el «Informe mensual de proveedor») y envío programado por correo; cada rol solo reporta lo que puede ver |
+
+Migraciones `0006_catalog` y `0007_report_templates`. Variables nuevas: `VIP_GROUP`,
+`LDAP_DEPARTMENT_ATTRIBUTE` y `REPORT_RECIPIENT_DOMAINS`. Con `SEED_DEMO=true` el seed
+`95_catalog_demo` agrega un catálogo genérico de ejemplo y tickets históricos para probar los reportes.
+Tras actualizar una instalación existente, ejecute `keycloak-config` (declara el atributo
+`department` y crea su mapper) y, si va a importar ANS por categoría, revise la precedencia de las
+políticas SLA por prioridad (ver [docs/REPORTS.md](docs/REPORTS.md)).
+
+Verificación de integración de la Fase 3 (24-11-2026, stack de laboratorio real): backend `pytest`
+513/513; Alembic con una sola cabeza (`0007_report_templates`; upgrade, downgrade a `0005_seed_state` y
+upgrade de nuevo en SQLite; en PostgreSQL el contenedor `api` aplicó `0006` y `0007` y los seeds, incluido
+`95_catalog_demo`); frontend `tsc` y `next build` sin errores; `keycloak-config` terminó con código 0 y
+aplicó el mapper del claim `department`; humo E2E con Playwright (admin y solicitante, escritorio y móvil)
+22/22: generador, «Informe mensual de proveedor», descarga `.xlsx` válida (sin fórmulas), Categorías,
+Importar catálogo, panel de clasificación, «Trasladar a orden de trabajo» y alcance «Tus tickets» del
+solicitante, sin desbordamiento horizontal ni respuestas HTTP ≥ 400.
 
 Pendiente antes del go-live (no bloquea el laboratorio): conectar el AD real (`LDAP_*`, CA en
 `keycloak/truststore`), configurar SMTP, certificado/DNS de `APP_DOMAIN` y un ensayo completo de
@@ -102,15 +131,15 @@ Con `KC_LAB_USERS=true`, `keycloak-config` crea usuarios **locales** de Keycloak
 `KC_LAB_PASSWORD` (12+ caracteres). Son los mismos nombres que los datos demo del backend
 (`SEED_DEMO=true`):
 
-| Usuario | Roles | Grupos |
-|---|---|---|
-| `demo.admin` | admin, agent | `GG-SD-Admins`, `GG-SD-Agentes` |
-| `ana.telecom` | agent | `GG-SD-Agentes`, `GG-SD-Telecomunicaciones` |
-| `luis.soc` | agent | `GG-SD-Agentes`, `GG-SD-SOC` |
-| `rosa.redes` | agent | `GG-SD-Agentes`, `GG-SD-SeguridadRedes` |
-| `marta.aprobadora` | approver | `GG-SD-Aprobadores` |
-| `carlos.solicitante` | requester | — |
-| `sofia.solicitante` | requester | — |
+| Usuario | Roles | Grupos | Atributo `department` |
+|---|---|---|---|
+| `demo.admin` | admin, agent | `GG-SD-Admins`, `GG-SD-Agentes` | `Sistemas y Telecomunicaciones` |
+| `ana.telecom` | agent | `GG-SD-Agentes`, `GG-SD-Telecomunicaciones` | `Telecomunicaciones` |
+| `luis.soc` | agent | `GG-SD-Agentes`, `GG-SD-SOC` | `SISTEMAS Y TELECOMUNICACIONES` |
+| `rosa.redes` | agent | `GG-SD-Agentes`, `GG-SD-SeguridadRedes` | `SISTEMAS Y TELECOMUNICACIONES` |
+| `marta.aprobadora` | approver | `GG-SD-Aprobadores` | `SERVICIOS CORPORATIVOS` |
+| `carlos.solicitante` | requester | — | `07 COMERCIAL` |
+| `sofia.solicitante` | requester | `GG-SD-VIP` | `DISTRIBUCION` |
 
 Todos tienen además `requester`. Con `KC_LAB_USERS=false` se deshabilitan en la siguiente ejecución.
 Con `SEED_DEMO=true`, el primer login de cada usuario lab hereda los tickets y equipos de su usuario
@@ -180,7 +209,8 @@ Listas completas y comentadas: [`.env.example`](.env.example) (laboratorio) y
 (`ENVIRONMENT`), bases de datos (`DB_PASSWORD`, `KC_DB_PASSWORD`), Redis (`REDIS_PASSWORD`, prod),
 Keycloak (`KC_*`), autenticación (`AUTH_MODE`, `OIDC_*`), API (`LOG_LEVEL`, `UVICORN_WORKERS`,
 `FORWARDED_ALLOW_IPS`, `CELERY_*`), frontend (`NEXT_PUBLIC_*`, se aplican en el build), AD
-(`LDAP_*`), seeds (`SEED_DEMO`, `SEED_TEAM_GROUPS`), SLA (`TZ_BUSINESS`), adjuntos (`MINIO_ROOT_*`,
+(`LDAP_*`, incluido `LDAP_DEPARTMENT_ATTRIBUTE`), seeds (`SEED_DEMO`, `SEED_TEAM_GROUPS`), SLA
+(`TZ_BUSINESS`), catálogo y reportes (`VIP_GROUP`, `REPORT_RECIPIENT_DOMAINS`), adjuntos (`MINIO_ROOT_*`,
 `S3_*`, `MAX_ATTACHMENT_MB`), correo (`SMTP_*`), proxy (`APP_DOMAIN`, `TLS_MODE`, `ADMIN_ALLOWED_CIDRS`)
 y copias (`BACKUP_*`).
 

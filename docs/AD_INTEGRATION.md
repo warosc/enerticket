@@ -10,8 +10,10 @@ flowchart LR
     U[Usuario] -->|usuario + contraseña de AD| KC[Keycloak<br/>realm energuate]
     KC -->|1. bind cuenta de servicio<br/>2. búsqueda sAMAccountName<br/>3. bind del usuario| AD[(Active Directory<br/>LDAPS 636 / StartTLS 389)]
     KC -->|sincronización periódica<br/>usuarios y grupos| AD
-    KC -->|JWT: realm_access.roles, groups| API[API Service Desk]
+    KC -->|JWT: realm_access.roles, groups, department| API[API Service Desk]
     API -->|groups ↔ teams.external_group| EQ[Equipos del Service Desk]
+    API -->|department ↔ department_aliases| DEP[Departamento y gerencia del usuario]
+    API -->|groups ∋ VIP_GROUP / gerencias.external_group| VIP[VIP y visores de gerencia]
 ```
 
 ## 1. Qué se necesita del equipo de AD
@@ -26,6 +28,9 @@ flowchart LR
 | DN base de grupos | `OU=Grupos,OU=ServiceDesk,DC=energuate,DC=local` | Donde viven los grupos `GG-SD-*`. |
 | Grupos de rol | `GG-SD-Admins`, `GG-SD-Agentes`, `GG-SD-Aprobadores` | Dan los roles de la aplicación. |
 | Grupos de equipo | `GG-SD-Telecomunicaciones`, `GG-SD-SeguridadRedes`, `GG-SD-SOC`, `GG-SD-Riesgo`, `GG-SD-ProyectosTI`, `GG-SD-General` | Asignan al agente a su equipo/departamento. |
+| Atributo de departamento | `department` (p. ej. `07 COMERCIAL`) | Departamento del usuario (Fase 3). Otro atributo: `LDAP_DEPARTMENT_ATTRIBUTE`. |
+| Grupo VIP | `GG-SD-VIP` | Usuarios VIP (`VIP_GROUP`). Opcional. |
+| Grupos de gerencia | p. ej. `GG-SD-Gerencia-Comercial` | Opcionales: sus miembros ven en solo lectura los tickets solicitados por la gerencia. |
 
 ### Permisos de la cuenta de servicio
 
@@ -36,7 +41,8 @@ defecto). Recomendaciones:
 - "La cuenta es confidencial y no se puede delegar"; denegar inicio de sesión local y por RDP (GPO).
 - Si se usan ACL restrictivas, conceder lectura sobre `sAMAccountName`, `cn`, `givenName`, `sn`,
   `mail`, `userPrincipalName`, `objectGUID`, `memberOf`, `member`, `userAccountControl`,
-  `whenCreated`, `whenChanged` en las OU de usuarios y grupos.
+  `whenCreated`, `whenChanged` y `department` (o el atributo de `LDAP_DEPARTMENT_ATTRIBUTE`) en las OU
+  de usuarios y grupos.
 - Keycloak opera en modo `READ_ONLY`: nunca escribe en el AD, y los cambios de contraseña se hacen
   en el AD (no desde Keycloak).
 
@@ -50,6 +56,7 @@ defecto). Recomendaciones:
 | Clases de objeto | `person, organizationalPerson, user` | |
 | Nombre / Apellido / Correo | `givenName` / `sn` / `mail` | Mappers por defecto del vendor `ad`. |
 | Grupos | `group-ldap-mapper` (`cn`, membresía `member`) | READ_ONLY, sin jerarquía (`groups.path=/`). |
+| Atributo `department` | `department` (`LDAP_DEPARTMENT_ATTRIBUTE`) | Mapper `department-ad` (`user-attribute-ldap-mapper`), solo lectura y leído siempre del AD. Llega al token como claim `department` (mapper `department` del cliente `servicedesk-web`). |
 
 El inicio de sesión también acepta el correo (`loginWithEmailAllowed`).
 
@@ -83,6 +90,9 @@ LDAP_READ_TIMEOUT=30000                  # ms
 LDAP_FULL_SYNC_PERIOD=86400              # s (-1 desactiva)
 LDAP_CHANGED_SYNC_PERIOD=3600            # s (-1 desactiva)
 LDAP_SYNC_USERS_ON_START=false           # true = importa todos al ejecutar keycloak-config
+
+LDAP_DEPARTMENT_ATTRIBUTE=department         # vacío = no se mapea el departamento
+VIP_GROUP=GG-SD-VIP                          # grupo de usuarios VIP (también lo usa la API)
 
 KC_GROUP_ROLE_MAP=GG-SD-Admins:admin,GG-SD-Agentes:agent,GG-SD-Aprobadores:approver
 SEED_TEAM_GROUPS="Telecomunicaciones:GG-SD-Telecomunicaciones,Seguridad de Redes:GG-SD-SeguridadRedes,Ciberseguridad / SOC:GG-SD-SOC,Riesgo y Cumplimiento:GG-SD-Riesgo,Proyectos TI:GG-SD-ProyectosTI,General:GG-SD-General"
@@ -133,7 +143,11 @@ Salida esperada:
 
 ```
 [keycloak-config] federación LDAP 'energuate-ad' creada (id …)
+[keycloak-config] grupo VIP 'GG-SD-VIP' presente en Keycloak
+[keycloak-config] perfil de usuario: atributo 'department' declarado (edición solo administradores)
+[keycloak-config] cliente 'servicedesk-web': mapper del claim 'department' creado
 [keycloak-config] mapper de grupos 'groups-ad' creado (id …)
+[keycloak-config] mapper de departamento 'department-ad' creado (department -> department, id …)
 [keycloak-config] prueba de conexión y bind contra AD: correcta
 [keycloak-config] grupos sincronizados desde AD: …
 [keycloak-config] grupo 'GG-SD-Admins' -> rol 'admin'
@@ -153,10 +167,10 @@ informa del motivo.
    SD_KEYCLOAK_URL=https://<APP_DOMAIN>/auth SD_WEB_URL=https://<APP_DOMAIN> \
      scripts/get-test-token.sh -u jperez --claims
    ```
-   El token debe contener `aud: servicedesk-api`, `realm_access.roles` (p. ej. `agent`) y
-   `groups` (p. ej. `["GG-SD-Agentes","GG-SD-SOC"]`).
-3. La API crea el usuario en su primer acceso (JIT) y lo asigna a los equipos cuyo
-   `teams.external_group` coincide con sus grupos.
+   El token debe contener `aud: servicedesk-api`, `realm_access.roles` (p. ej. `agent`),
+   `groups` (p. ej. `["GG-SD-Agentes","GG-SD-SOC"]`) y `department` (p. ej. `"07 COMERCIAL"`).
+3. La API crea el usuario en su primer acceso (JIT), lo asigna a los equipos cuyo
+   `teams.external_group` coincide con sus grupos y resuelve su departamento (ver sección 7).
 
 ### Prueba de conectividad desde el host (sin Keycloak)
 
@@ -186,7 +200,69 @@ LDAPTLS_CACERT=keycloak/truststore/energuate-root-ca.pem ldapsearch -H ldaps://d
 Para añadir un área nueva: cree el grupo en AD (`GG-SD-<Área>`), cree el equipo en la aplicación con
 ese `external_group`, y ejecute `keycloak-config` (o espere a la sincronización periódica).
 
-## 7. Sincronización
+## 7. Departamento, gerencia y VIP (Fase 3)
+
+### Atributo `department` → departamento del usuario
+
+1. El AD guarda el departamento como texto libre en el atributo `department` (a veces con un código
+   delante: `07 COMERCIAL`, `0903 Distribución`). Keycloak lo copia al atributo de usuario
+   `department` (mapper LDAP `department-ad`) y lo envía en el claim `department` del token.
+2. En cada login la API **normaliza** el valor (mayúsculas, sin tildes, sin prefijo numérico ni
+   espacios sobrantes: `07 Comercial` → `COMERCIAL`) y lo busca en los **alias** de departamento
+   (`department_aliases`).
+3. Si el alias ya está asignado, actualiza `users.department_id`. Si el valor del AD **cambió** y el
+   alias está pendiente (o sin departamento), el usuario queda **sin departamento** hasta que se
+   asigne: así la gerencia anterior deja de ver sus tickets nuevos. Si el valor no cambió, se respeta
+   el departamento fijado a mano por un administrador. Si es un valor nuevo:
+   - si coincide con el nombre de un departamento existente (p. ej. departamento «Comercial»), el alias
+     se crea ya asignado;
+   - si no, queda **pendiente** y aparece resaltado para los administradores en
+     **Administración → Valores del AD**, donde se asigna a un departamento (también se pueden
+     registrar alias por adelantado). Al asignarlo, los usuarios que ya traían ese valor se
+     actualizan **al instante** y sus tickets creados mientras el valor estaba pendiente reciben el
+     departamento solicitante (la gerencia los ve y los reportes los atribuyen); los demás, en su
+     siguiente login. Retirar el departamento de un alias también lo retira de esos usuarios.
+4. Si el token no trae `department` (atributo vacío o mapper no configurado), la API no toca el
+   departamento actual; el administrador puede fijarlo a mano en **Administración → Usuarios**
+   (el siguiente login con claim `department` vuelve a mandar el AD).
+
+Varios valores del AD pueden apuntar al mismo departamento (`COMERCIAL`, `GERENCIA COMERCIAL`,
+`VENTAS`…). Los departamentos **solicitantes** (los del AD) no tienen por qué atender tickets: la
+casilla «Atiende tickets» (`serves_tickets`) distingue los departamentos de atención (Telecomunicaciones,
+Soporte Técnico…) que aparecen al crear un ticket.
+
+Keycloak 26 tiene el **perfil de usuario declarativo** siempre activo y descarta los atributos que no
+están declarados. `keycloak-config` declara `department` en *Realm settings → User profile* (lectura
+para el usuario y administradores, edición solo administradores); los realms nuevos ya lo traen en
+`realm-energuate.json`. Si se ve el atributo vacío en un usuario de AD, revise que el mapper
+`department-ad` exista en *User federation → energuate-ad → Mappers* y que el usuario tenga el
+atributo en el AD.
+
+### Gerencias
+
+Cada departamento pertenece (opcionalmente) a una **gerencia** (*Administración → Gerencias* y
+*Departamentos*). La gerencia del solicitante se guarda en cada ticket a través de su departamento y
+permite reportar «tickets por gerencia solicitante».
+
+Visores de gerencia (solo lectura de los tickets **solicitados** por los departamentos de la gerencia,
+sin poder editar, transicionar ni ver comentarios internos):
+- **Por grupo AD**: el campo «Grupo AD» de la gerencia (`gerencias.external_group`), p. ej.
+  `GG-SD-Gerencia-Comercial`. Los miembros del grupo (claim `groups`) son visores mientras la gerencia
+  esté activa. Cree el grupo en AD bajo `LDAP_GROUPS_DN` para que la sincronización lo traiga.
+- **Manual**: *Administración → Gerencias → Visores* (`gerencia_viewers`).
+
+Los visores generan reportes dentro de ese mismo alcance (ver [REPORTS.md](REPORTS.md)).
+
+### Usuarios VIP
+
+`VIP_GROUP` (por defecto `GG-SD-VIP`): en cada login, si el token trae `groups`, `users.vip` refleja la
+pertenencia al grupo (sin distinguir mayúsculas). Los tickets que crea un VIP quedan marcados (`vip`)
+y una política SLA puede aplicarse **solo a VIP** (*SLA → Políticas → Solo VIP*). `keycloak-config`
+crea el grupo en Keycloak si no existe (con AD, se vincula por nombre al sincronizar). El
+administrador también puede marcar/desmarcar VIP a mano en *Administración → Usuarios*; el siguiente
+login con grupos lo vuelve a calcular.
+
+## 8. Sincronización
 
 | Tipo | Periodo | Variable |
 |---|---|---|
@@ -194,6 +270,9 @@ ese `external_group`, y ejecute `keycloak-config` (o espere a la sincronización
 | Cambios (`whenChanged`) | 1 h | `LDAP_CHANGED_SYNC_PERIOD` |
 | Grupos | al ejecutar `keycloak-config` y con cada sincronización | — |
 | Al iniciar sesión | siempre | Keycloak consulta el AD en cada login (contraseña y estado). |
+
+El atributo `department` se lee del AD en cada login (`always.read.value.from.ldap`), así que un
+cambio de departamento llega al portal en el siguiente inicio de sesión sin esperar la sincronización.
 
 Sincronización manual: consola de Keycloak → realm `energuate` → *User federation* →
 `energuate-ad` → *Synchronize all users*; grupos: *Mappers* → `groups-ad` → *Sync LDAP groups to
@@ -203,7 +282,7 @@ Bajas: al deshabilitar la cuenta en AD, el usuario no puede iniciar sesión (fil
 sesiones activas expiran como máximo en `ssoSessionIdleTimeout` (30 min); para cortar
 inmediatamente, cierre sus sesiones en Keycloak (*Users → Sessions → Sign out*).
 
-## 8. Solución de problemas
+## 9. Solución de problemas
 
 | Síntoma (logs de `keycloak-config` / `keycloak`) | Causa probable | Acción |
 |---|---|---|
@@ -218,15 +297,30 @@ inmediatamente, cierre sus sesiones en Keycloak (*Users → Sessions → Sign ou
 | Usuario no aparece en su equipo | `groups` del token no coincide con `teams.external_group` | Compare con `get-test-token.sh --claims`; ajuste el equipo en Administración. |
 | `una variable LDAP_* conserva el valor de ejemplo` | `.env` con `replace-...` | Complete los valores o deje `LDAP_URL=` vacío para omitir AD. |
 | `ldap:// sin StartTLS envía la contraseña … en claro` | Falta cifrado | Use `ldaps://` o `LDAP_START_TLS=true`. |
+| El token no trae `department` | Atributo vacío en AD, mapper `department-ad` ausente o atributo no declarado en el perfil de usuario | Revise el usuario en Keycloak (pestaña *Attributes*/*Details*), el mapper y *Realm settings → User profile*; ejecute `keycloak-config`. |
+| Usuario sin departamento en el portal | Valor del AD pendiente de asignar | *Administración → Valores del AD*: asigne el valor resaltado a un departamento. |
+| VIP no se actualiza | El token no trae `groups` o el grupo no coincide con `VIP_GROUP` | Compare con `get-test-token.sh --claims`. |
 
 Logs detallados de LDAP (temporalmente): `KC_LOG_LEVEL=info,org.keycloak.storage.ldap:debug` y
 `docker compose … up -d keycloak`. Vuelva a `info` al terminar: el nivel debug puede registrar DN y
 atributos de usuarios.
 
-## 9. Laboratorio sin AD
+## 10. Laboratorio sin AD
 
 Con `LDAP_URL` vacío no se crea federación. Para pruebas, `KC_LAB_USERS=true` (solo en
 `docker-compose.yml`) crea usuarios locales con los grupos anteriores: `demo.admin`, `ana.telecom`,
 `luis.soc`, `rosa.redes`, `marta.aprobadora`, `carlos.solicitante` y `sofia.solicitante` (contraseña
-`KC_LAB_PASSWORD`). En producción `KC_LAB_USERS` está fijado a `false` y esos usuarios se
+`KC_LAB_PASSWORD`), con su atributo `department` como llegaría del AD:
+
+| Usuario | `department` | Departamento (con `SEED_DEMO=true`) | Grupos extra |
+|---|---|---|---|
+| `demo.admin` | `Sistemas y Telecomunicaciones` | Sistemas y Telecomunicaciones (Gerencia de Tecnología) | |
+| `ana.telecom` | `Telecomunicaciones` | Telecomunicaciones | |
+| `luis.soc`, `rosa.redes` | `SISTEMAS Y TELECOMUNICACIONES` | Sistemas y Telecomunicaciones | |
+| `marta.aprobadora` | `SERVICIOS CORPORATIVOS` | Servicios Corporativos | visor manual de la Gerencia Comercial |
+| `carlos.solicitante` | `07 COMERCIAL` | Comercial (Gerencia Comercial) | |
+| `sofia.solicitante` | `DISTRIBUCION` | Distribución (Gerencia de Distribución) | `GG-SD-VIP` |
+
+En modo `AUTH_MODE=dev` el departamento se simula con la cabecera `X-Dev-Department` (y el VIP con
+`X-Dev-Groups`). En producción `KC_LAB_USERS` está fijado a `false` y esos usuarios se
 deshabilitan si existieran.

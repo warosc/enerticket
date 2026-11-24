@@ -1,5 +1,5 @@
 """Tickets: listado con filtros y permisos por área, creación, edición, transiciones,
-comentarios e historial."""
+comentarios, historial y traslado a orden de trabajo."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.permissions import visible_tickets_filter
 from app.core.security import Principal, get_principal, require_roles
-from app.models.core import Priority, Ticket, WorkflowState
+from app.models.core import Priority, Ticket, TicketType, WorkflowState
 from app.schemas.core import (
     CommentIn,
     CommentOut,
@@ -23,6 +23,7 @@ from app.schemas.core import (
     TicketPage,
     TicketPatch,
     TransitionIn,
+    WorkOrderIn,
 )
 from app.services import tickets as svc
 
@@ -48,6 +49,9 @@ def list_tickets(
     team_id: Optional[int] = None,
     assignee_id: Optional[int] = None,
     requester_id: Optional[int] = None,
+    category_id: Optional[int] = None,
+    subcategory_id: Optional[int] = None,
+    type_key: Optional[str] = Query(default=None, description="Claves de tipo separadas por coma"),
     unassigned: bool = False,
     mine: bool = Query(default=False, description="Solo tickets creados por mí o asignados a mí"),
     q: Optional[str] = Query(default=None, max_length=200),
@@ -83,6 +87,13 @@ def list_tickets(
         conditions.append(Ticket.assignee_id == assignee_id)
     if requester_id is not None:
         conditions.append(Ticket.requester_id == requester_id)
+    if category_id is not None:
+        conditions.append(Ticket.category_id == category_id)
+    if subcategory_id is not None:
+        conditions.append(Ticket.subcategory_id == subcategory_id)
+    type_keys = _csv(type_key)
+    if type_keys:
+        conditions.append(Ticket.type_id.in_(select(TicketType.id).where(TicketType.key.in_(type_keys))))
     if unassigned:
         conditions.append(Ticket.assignee_id.is_(None))
     if mine:
@@ -140,6 +151,10 @@ def create_ticket(
         priority_key=payload.priority_key,
         department_id=payload.department_id,
         project_id=payload.project_id,
+        category_id=payload.category_id,
+        subcategory_id=payload.subcategory_id,
+        provider_id=payload.provider_id,
+        channel=payload.channel,
     )
     session.commit()
     return svc.ticket_out(session, ticket.id)
@@ -176,9 +191,42 @@ def transition_ticket(
     session: Session = Depends(get_db),
 ) -> dict:
     ticket = svc.get_visible_ticket(session, principal, ticket_id, for_update=True)
-    svc.transition_ticket(session, principal, ticket, payload.to_state_key, payload.comment)
+    svc.transition_ticket(
+        session,
+        principal,
+        ticket,
+        payload.to_state_key,
+        payload.comment,
+        resolution_note=payload.resolution_note,
+    )
     session.commit()
     return svc.ticket_out(session, ticket.id)
+
+
+@router.post(
+    "/tickets/{ticket_id}/work-order", response_model=TicketOut, status_code=status.HTTP_201_CREATED
+)
+def create_work_order(
+    ticket_id: int,
+    payload: WorkOrderIn,
+    principal: Principal = Depends(get_principal),
+    session: Session = Depends(get_db),
+) -> dict:
+    """Traslada el ticket a una orden de trabajo (ticket hijo ``work_order``)."""
+    parent = svc.get_visible_ticket(session, principal, ticket_id, for_update=True)
+    child = svc.create_work_order(
+        session,
+        principal,
+        parent,
+        title=payload.title,
+        description=payload.description,
+        category_id=payload.category_id,
+        subcategory_id=payload.subcategory_id,
+        resolve_parent=payload.resolve_parent,
+        resolution_note=payload.resolution_note,
+    )
+    session.commit()
+    return svc.ticket_out(session, child.id)
 
 
 @router.get("/tickets/{ticket_id}/comments", response_model=list[CommentOut])

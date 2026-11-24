@@ -24,11 +24,13 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Icon } from '@/components/icons';
+import ResolveDialog, { type ResolveFailure } from '@/components/tickets/ResolveDialog';
 import { Alert, CollapsibleFilters, EmptyState, ErrorAlert, Loading, PageHeader } from '@/components/ui';
-import { apiFetch, errorMessage } from '@/lib/api';
+import { ApiError, apiFetch, errorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatNumber, formatRelative } from '@/lib/format';
 import { useCatalog } from '@/lib/hooks';
+import { isResolvingTransition, needsCategoryToResolve } from '@/lib/ticketRules';
 import type { TicketOut, UserOut, WorkflowState } from '@/lib/types';
 import {
   activeFilterCount,
@@ -171,14 +173,47 @@ export default function KanbanBoard() {
     setActiveTicket(ticketFrom(event.active.data.current));
   }, []);
 
-  const { moveTicket } = board;
+  // Resolver (entrar en un estado «done») exige la solución: se pide en un diálogo antes de mover.
+  const [resolving, setResolving] = useState<{ ticket: TicketOut; target: MoveTarget } | null>(null);
+  const { moveTicket: rawMoveTicket, applyTicket, notify: notifyBoard, reload: reloadBoard } = board;
+  const moveTicket = useCallback(
+    (ticket: TicketOut, toStateKey: string) => {
+      const target = getTargets(ticket).find((t) => t.state.key === toStateKey);
+      if (workflow && target && isResolvingTransition(workflow, ticket, target.transition)) {
+        setResolving({ ticket, target });
+        return;
+      }
+      void rawMoveTicket(ticket, toStateKey);
+    },
+    [getTargets, workflow, rawMoveTicket],
+  );
+  const onResolveFailed = useCallback(
+    ({ error }: ResolveFailure) => {
+      const current = resolving;
+      setResolving(null);
+      if (!current) return;
+      const { ticket, target } = current;
+      if (target.transition.requires_approval && error instanceof ApiError && error.status === 409) {
+        notifyBoard(
+          'warning',
+          `«${target.transition.name || target.state.name}» requiere aprobación: ${errorMessage(error)}`,
+          `/tickets/${ticket.id}`,
+        );
+      } else {
+        notifyBoard('error', `No se pudo mover ${ticket.key}: ${errorMessage(error)}`, `/tickets/${ticket.id}`);
+      }
+      reloadBoard({ silent: true });
+    },
+    [resolving, notifyBoard, reloadBoard],
+  );
+
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
       const ticket = ticketFrom(event.active.data.current);
       setActiveTicket(null);
       const state = stateFrom(event.over?.data.current);
       if (!ticket || !state || state.id === ticket.status.id) return;
-      void moveTicket(ticket, state.key);
+      moveTicket(ticket, state.key);
     },
     [moveTicket],
   );
@@ -213,7 +248,7 @@ export default function KanbanBoard() {
     [],
   );
 
-  const onMove = useCallback((ticket: TicketOut, toStateKey: string) => void moveTicket(ticket, toStateKey), [moveTicket]);
+  const onMove = useCallback((ticket: TicketOut, toStateKey: string) => moveTicket(ticket, toStateKey), [moveTicket]);
   const onRetry = useCallback(() => board.reload(), [board]);
 
   // ---------- Render ----------
@@ -362,6 +397,28 @@ export default function KanbanBoard() {
             <DragOverlay dropAnimation={null}>{activeTicket ? <KanbanCardOverlay ticket={activeTicket} /> : null}</DragOverlay>
           </DndContext>
         </>
+      )}
+
+      {resolving && catalog && (
+        <ResolveDialog
+          ticket={resolving.ticket}
+          transition={resolving.target.transition}
+          targetName={resolving.target.state.name}
+          catalog={catalog}
+          needsCategory={me ? needsCategoryToResolve(me, resolving.ticket, catalog) : false}
+          comment=""
+          onCancel={() => setResolving(null)}
+          onResolved={(updated) => {
+            setResolving(null);
+            applyTicket(
+              updated,
+              updated.status.key === resolving.target.state.key
+                ? `${updated.key} movido a «${updated.status.name}».`
+                : `${updated.key} quedó en «${updated.status.name}».`,
+            );
+          }}
+          onFailed={onResolveFailed}
+        />
       )}
     </div>
   );

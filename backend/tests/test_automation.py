@@ -9,9 +9,18 @@ from sqlalchemy import select
 
 from app.core.db import SessionLocal
 from app.models.automation import AutomationExecution, AutomationRule, Notification
-from app.models.core import TicketComment
+from app.models.core import TicketComment, TicketType
 from app.services.automation.engine import compare
 from tests.conftest import DEPARTMENT_SOC, DEPARTMENT_TELECOM
+
+
+@pytest.fixture(autouse=True)
+def change_type_enabled():
+    """Fase 3 desactiva el tipo «change» (``core.ticket_types.v2``); estas pruebas de flujos lo
+    usan como tipo con aprobación, así que lo reactivan."""
+    with SessionLocal() as session:
+        session.scalar(select(TicketType).where(TicketType.key == "change")).active = True
+        session.commit()
 
 
 @pytest.fixture
@@ -137,12 +146,12 @@ def test_failed_action_is_recorded_without_breaking_request(client, admin, reque
     _create_rule(
         client, admin, name="Transición imposible",
         actions=[
-            {"type": "transition", "to_state": "closed"},  # new → closed sí existe
-            {"type": "transition", "to_state": "resolved"},  # closed → resolved no existe
+            {"type": "transition", "to_state": "in_progress"},  # new → in_progress sí existe
+            {"type": "transition", "to_state": "triage"},  # in_progress → triage no existe
         ],
     )
     ticket = create_ticket(requester)
-    assert ticket["status"]["key"] == "closed"
+    assert ticket["status"]["key"] == "in_progress"
     execution = _executions()[0]
     assert execution.status == "partial"
     assert execution.result[0]["ok"] is True and execution.result[1]["ok"] is False
@@ -341,3 +350,34 @@ def test_automation_actions_do_not_count_as_first_response(client, admin, agent,
     client.post(f"/tickets/{ticket['id']}/comments", json={"body": "Lo reviso", "visibility": "public"}, headers=agent.headers)
     after = client.get(f"/tickets/{ticket['id']}", headers=agent.headers).json()
     assert after["first_response_at"] is not None
+
+
+def test_transition_action_resolves_with_solution_template(client, admin, requester, create_ticket):
+    """Resolver exige solución: la acción de cambio de estado la toma de ``body`` (plantilla)."""
+    _create_rule(
+        client, admin, name="Sin solución",
+        conditions={"match": "all", "rules": [{"field": "ticket.title", "op": "contains", "value": "sin-nota"}]},
+        actions=[
+            {"type": "transition", "to_state": "in_progress"},
+            {"type": "transition", "to_state": "resolved"},
+        ],
+    )
+    _create_rule(
+        client, admin, name="Con solución",
+        conditions={"match": "all", "rules": [{"field": "ticket.title", "op": "contains", "value": "con-nota"}]},
+        actions=[
+            {"type": "transition", "to_state": "in_progress"},
+            {"type": "transition", "to_state": "resolved", "body": "Cerrado por regla {{ticket.key}}"},
+        ],
+    )
+    without = create_ticket(requester, title="Ticket sin-nota")
+    assert without["status"]["key"] == "in_progress"
+    assert "solución" in (_executions("Sin solución")[0].error or "")
+
+    with_note = create_ticket(requester, title="Ticket con-nota")
+    assert with_note["status"]["key"] == "resolved"
+    assert with_note["resolution_note"] == f"Cerrado por regla {with_note['key']}"
+    assert _executions("Con solución")[0].status == "success"
+    rule = client.get("/automations/rules", headers=admin.headers).json()
+    stored = next(r for r in rule if r["name"] == "Con solución")
+    assert stored["actions"][1]["body"].startswith("Cerrado por regla")

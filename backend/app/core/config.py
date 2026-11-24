@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     # (por defecto) un token sin el claim se trata como "sin grupos" y se retiran las membresías
     # de equipos mapeados (external_group); con False no se sincronizan equipos.
     oidc_missing_groups_as_empty: bool = True
+    # Grupo AD/Keycloak cuyos miembros son usuarios VIP (se sincroniza en cada login cuando el
+    # token trae el claim ``groups``). El departamento llega en el claim ``department``.
+    vip_group: str = "GG-SD-VIP"
 
     # --- Eventos ---
     events_channel: str = "servicedesk.events"
@@ -121,6 +124,11 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = "servicedesk@localhost"
     smtp_starttls: bool = True
+
+    # --- Reportes ---
+    # Dominios permitidos para los destinatarios de envíos programados (separados por coma;
+    # vacío = cualquier dominio).
+    report_recipient_domains: str = ""
 
     # --- Celery ---
     celery_beat_schedule_file: str = "/tmp/celerybeat-schedule"

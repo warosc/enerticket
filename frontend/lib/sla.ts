@@ -149,6 +149,10 @@ export interface SlaPolicy {
   priority_keys: string[];
   type_keys: string[];
   department_ids: number[];
+  /** Fase 3: categorías/subcategorías del catálogo (vacía = todas) y solo tickets VIP. */
+  category_ids: number[];
+  subcategory_ids: number[];
+  vip_only: boolean;
   precedence: number;
   first_response_minutes: number | null;
   resolution_minutes: number | null;
@@ -168,6 +172,9 @@ export interface SlaPolicyInput {
   priority_keys: string[];
   type_keys: string[];
   department_ids: number[];
+  category_ids?: number[];
+  subcategory_ids?: number[];
+  vip_only?: boolean;
   precedence: number;
   first_response_minutes: number | null;
   resolution_minutes: number | null;

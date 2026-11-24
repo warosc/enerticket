@@ -66,6 +66,10 @@ DEMO_TICKETS = (
 )
 
 
+# Solución usada al resolver/cerrar los tickets demo (resolver exige solución desde la Fase 3).
+DEMO_RESOLUTION_NOTE = "Atendido en la demostración: se aplicó la corrección y el solicitante confirmó."
+
+
 def _ensure_user(session: Session, demo: DemoUser) -> User:
     sub = f"dev:{demo.username}"
     user = session.scalar(select(User).where(User.keycloak_sub == sub))
@@ -133,7 +137,9 @@ def run(session: Session) -> None:
             if assignee:
                 svc.update_ticket(session, admin, ticket, {"assignee_id": users[assignee][0].id})
             for state_key in path:
-                svc.transition_ticket(session, admin, ticket, state_key)
+                svc.transition_ticket(
+                    session, admin, ticket, state_key, resolution_note=DEMO_RESOLUTION_NOTE
+                )
         except HTTPException as exc:
             # Un guard de otro módulo (p.ej. aprobaciones) puede bloquear el recorrido demo.
             logger.info("Ticket demo %s quedó en su estado actual: %s", ticket.key, exc.detail)

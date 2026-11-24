@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Visibility = Literal["public", "internal"]
 TeamRole = Literal["member", "lead"]
+Channel = Literal["portal", "email", "phone", "other"]
 
 
 def _strip(value: Any) -> Any:
@@ -79,6 +80,19 @@ class TicketOut(BaseModel):
     first_response_at: Optional[datetime] = None
     resolved_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
+    # --- Catálogo de servicio (Fase 3) ---
+    category: Optional[IdName] = None
+    subcategory: Optional[IdName] = None
+    provider: Optional[IdName] = None
+    channel: Channel = "portal"
+    vip: bool = False
+    resolution_note: Optional[str] = None
+    resolved_by: Optional[UserRef] = None
+    requester_department: Optional[IdName] = None
+    gerencia: Optional[IdName] = None
+    parent_ticket_id: Optional[int] = None
+    child_ticket_ids: list[int] = Field(default_factory=list)
+    business_resolution_minutes: Optional[int] = None
 
 
 class TicketPage(BaseModel):
@@ -95,6 +109,11 @@ class TicketCreate(BaseModel):
     priority_key: str = "medium"
     department_id: int
     project_id: Optional[int] = None
+    category_id: Optional[int] = None
+    subcategory_id: Optional[int] = None
+    # Solo agentes/administradores: a un solicitante se le fija ``portal`` y sin proveedor.
+    provider_id: Optional[int] = None
+    channel: Optional[Channel] = None
 
     _strip_title = field_validator("title", "description", mode="before")(_strip)
 
@@ -108,13 +127,37 @@ class TicketPatch(BaseModel):
     assignee_id: Optional[int] = None
     team_id: Optional[int] = None
     department_id: Optional[int] = None
+    category_id: Optional[int] = None
+    subcategory_id: Optional[int] = None
+    provider_id: Optional[int] = None
+    channel: Optional[Channel] = None
+    resolution_note: Optional[str] = Field(default=None, max_length=20000)
 
-    _strip_title = field_validator("title", "description", mode="before")(_strip)
+    _strip_title = field_validator("title", "description", "resolution_note", mode="before")(_strip)
 
 
 class TransitionIn(BaseModel):
     to_state_key: str = Field(min_length=1, max_length=50)
     comment: Optional[str] = Field(default=None, max_length=20000)
+    # Solución: obligatoria al pasar a un estado de categoría ``done`` (si no estaba guardada).
+    resolution_note: Optional[str] = Field(default=None, max_length=20000)
+
+    _strip_note = field_validator("resolution_note", mode="before")(_strip)
+
+
+class WorkOrderIn(BaseModel):
+    """Traslado a orden de trabajo: crea un ticket ``work_order`` hijo del ticket indicado."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[str] = Field(default=None, min_length=3, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=20000)
+    category_id: Optional[int] = None
+    subcategory_id: Optional[int] = None
+    resolve_parent: bool = False
+    resolution_note: Optional[str] = Field(default=None, max_length=20000)
+
+    _strip_fields = field_validator("title", "description", "resolution_note", mode="before")(_strip)
 
 
 class CommentIn(BaseModel):
@@ -168,6 +211,13 @@ class MeOut(BaseModel):
     roles: list[str]
     teams: list[TeamRef]
     department_ids: list[int]
+    # Perfil del AD (Fase 3)
+    department: Optional[IdName] = None
+    gerencia: Optional[IdName] = None
+    vip: bool = False
+    viewer_gerencia_ids: list[int] = Field(default_factory=list)
+    # Equipos en los que el usuario es líder (p.ej. para ofrecer la programación de reportes).
+    lead_team_ids: list[int] = Field(default_factory=list)
 
 
 class UserOut(BaseModel):
@@ -177,12 +227,17 @@ class UserOut(BaseModel):
     email: Optional[str] = None
     roles: list[str]
     active: bool
+    department: Optional[IdName] = None
+    vip: bool = False
 
 
 class DepartmentOut(BaseModel):
     id: int
     name: str
     parent_id: Optional[int] = None
+    gerencia_id: Optional[int] = None
+    serves_tickets: bool = False
+    active: bool = True
 
 
 class TeamOut(BaseModel):
@@ -236,6 +291,30 @@ class WorkflowOut(BaseModel):
     transitions: list[WorkflowTransitionOut]
 
 
+class SubcategoryRef(BaseModel):
+    id: int
+    name: str
+
+
+class CategoryCatalogOut(BaseModel):
+    id: int
+    department_id: int
+    name: str
+    type_keys: list[str]
+    subcategories: list[SubcategoryRef]
+
+
+class ProviderCatalogOut(BaseModel):
+    id: int
+    name: str
+    department_ids: list[int]
+
+
+class ChannelOut(BaseModel):
+    key: Channel
+    label: str
+
+
 class CatalogOut(BaseModel):
     departments: list[DepartmentOut]
     teams: list[TeamOut]
@@ -243,6 +322,10 @@ class CatalogOut(BaseModel):
     ticket_types: list[TicketTypeOut]
     projects: list[ProjectOut]
     workflow: WorkflowOut
+    categories: list[CategoryCatalogOut] = Field(default_factory=list)
+    providers: list[ProviderCatalogOut] = Field(default_factory=list)
+    channels: list[ChannelOut] = Field(default_factory=list)
+    gerencias: list[IdName] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- administración
@@ -251,6 +334,9 @@ class CatalogOut(BaseModel):
 class DepartmentIn(BaseModel):
     name: str = Field(min_length=2, max_length=150)
     parent_id: Optional[int] = None
+    gerencia_id: Optional[int] = None
+    serves_tickets: bool = False
+    active: bool = True
 
     _strip_name = field_validator("name", mode="before")(_strip)
 
@@ -260,6 +346,9 @@ class DepartmentPatch(BaseModel):
 
     name: Optional[str] = Field(default=None, min_length=2, max_length=150)
     parent_id: Optional[int] = None
+    gerencia_id: Optional[int] = None
+    serves_tickets: Optional[bool] = None
+    active: Optional[bool] = None
 
     _strip_name = field_validator("name", mode="before")(_strip)
 
@@ -318,3 +407,187 @@ class ProjectPatch(BaseModel):
     team_id: Optional[int] = None
 
     _strip_fields = field_validator("code", "name", mode="before")(_strip)
+
+
+# --------------------------------------------------------------------------- catálogo de servicio (admin)
+
+
+class GerenciaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=2, max_length=150)
+    external_group: Optional[str] = Field(default=None, max_length=255)
+    active: bool = True
+
+    _strip_fields = field_validator("name", "external_group", mode="before")(_strip)
+
+
+class GerenciaPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(default=None, min_length=2, max_length=150)
+    external_group: Optional[str] = Field(default=None, max_length=255)
+    active: Optional[bool] = None
+
+    _strip_fields = field_validator("name", "external_group", mode="before")(_strip)
+
+
+class GerenciaOut(BaseModel):
+    id: int
+    name: str
+    external_group: Optional[str] = None
+    active: bool
+    department_ids: list[int] = Field(default_factory=list)
+
+
+class DepartmentAliasIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: str = Field(min_length=1, max_length=200)
+    department_id: Optional[int] = None
+
+
+class DepartmentAliasPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    department_id: Optional[int] = None
+
+
+class DepartmentAliasOut(BaseModel):
+    id: int
+    normalized_value: str
+    raw_value: str
+    department_id: Optional[int] = None
+    department: Optional[IdName] = None
+    pending: bool
+    created_at: datetime
+
+
+class CategoryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    department_id: int
+    name: str = Field(min_length=1, max_length=150)
+    type_keys: list[str] = Field(default_factory=list, max_length=10)
+    sort_order: int = Field(default=0, ge=-100000, le=100000)
+
+    _strip_name = field_validator("name", mode="before")(_strip)
+
+
+class CategoryPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=150)
+    type_keys: Optional[list[str]] = Field(default=None, max_length=10)
+    active: Optional[bool] = None
+    sort_order: Optional[int] = Field(default=None, ge=-100000, le=100000)
+
+    _strip_name = field_validator("name", mode="before")(_strip)
+
+
+class SubcategoryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=150)
+    sort_order: int = Field(default=0, ge=-100000, le=100000)
+
+    _strip_name = field_validator("name", mode="before")(_strip)
+
+
+class SubcategoryPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=150)
+    active: Optional[bool] = None
+    sort_order: Optional[int] = Field(default=None, ge=-100000, le=100000)
+
+    _strip_name = field_validator("name", mode="before")(_strip)
+
+
+class SubcategoryOut(BaseModel):
+    id: int
+    name: str
+    active: bool
+    sort_order: int
+
+
+class CategoryOut(BaseModel):
+    id: int
+    department_id: int
+    department: IdName
+    name: str
+    type_keys: list[str]
+    active: bool
+    sort_order: int
+    subcategories: list[SubcategoryOut]
+
+
+class ProviderIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=2, max_length=150)
+    department_ids: list[int] = Field(default_factory=list, max_length=200)
+    active: bool = True
+
+    _strip_name = field_validator("name", mode="before")(_strip)
+
+
+class ProviderPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(default=None, min_length=2, max_length=150)
+    department_ids: Optional[list[int]] = Field(default=None, max_length=200)
+    active: Optional[bool] = None
+
+    _strip_name = field_validator("name", mode="before")(_strip)
+
+
+class ProviderOut(BaseModel):
+    id: int
+    name: str
+    department_ids: list[int]
+    active: bool
+
+
+class ImportCreatedCounts(BaseModel):
+    categories: int = 0
+    subcategories: int = 0
+    policies: int = 0
+
+
+class ImportUpdatedCounts(BaseModel):
+    policies: int = 0
+
+
+class ImportLineError(BaseModel):
+    line: int
+    message: str
+
+
+class CatalogImportOut(BaseModel):
+    dry_run: bool
+    created: ImportCreatedCounts
+    updated: ImportUpdatedCounts
+    errors: list[ImportLineError]
+
+
+class UserProfilePatch(BaseModel):
+    """Ajuste manual del perfil (el siguiente login con claim ``department`` lo vuelve a fijar)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    vip: Optional[bool] = None
+    department_id: Optional[int] = None
+
+
+class GerenciaViewersIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_ids: list[int] = Field(default_factory=list, max_length=500)
+
+
+class GerenciaViewerOut(BaseModel):
+    id: int
+    username: str
+    display_name: str
+    email: Optional[str] = None

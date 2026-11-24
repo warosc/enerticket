@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type FormEvent } from 'react';
 import { EmptyState, ErrorAlert, Loading } from '@/components/ui';
+import '@/lib/catalog';
 import { CATEGORY_LABELS } from '@/lib/format';
 import { useApiResource, useCatalog } from '@/lib/hooks';
 import {
@@ -26,6 +27,9 @@ function emptyForm(calendarId: number | null): SlaPolicyInput {
     priority_keys: [],
     type_keys: [],
     department_ids: [],
+    category_ids: [],
+    subcategory_ids: [],
+    vip_only: false,
     precedence: 100,
     first_response_minutes: 60,
     resolution_minutes: 8 * 60,
@@ -44,6 +48,9 @@ function toForm(policy: SlaPolicy): SlaPolicyInput {
     priority_keys: policy.priority_keys,
     type_keys: policy.type_keys,
     department_ids: policy.department_ids,
+    category_ids: policy.category_ids ?? [],
+    subcategory_ids: policy.subcategory_ids ?? [],
+    vip_only: policy.vip_only ?? false,
     precedence: policy.precedence,
     first_response_minutes: policy.first_response_minutes,
     resolution_minutes: policy.resolution_minutes,
@@ -80,6 +87,59 @@ function PolicyForm({
 
   const priorities = [...catalog.priorities].sort((a, b) => b.rank - a.rank);
   const pausableStates = catalog.workflow.states.filter((s) => s.category !== 'done');
+
+  // Catálogo de servicio: categorías de los departamentos elegidos (o de todos) y sus subcategorías.
+  const categoryIds = form.category_ids ?? [];
+  const subcategoryIds = form.subcategory_ids ?? [];
+  const departmentNames = new Map(catalog.departments.map((d) => [d.id, d.name]));
+  const inScope = (departmentIds: number[]) =>
+    catalog.categories.filter((c) => departmentIds.length === 0 || departmentIds.includes(c.department_id));
+  const scopedCategories = inScope(form.department_ids);
+  const knownCategoryIds = new Set(catalog.categories.map((c) => c.id));
+  const categoryOptions = [
+    ...scopedCategories.map((c) => ({
+      value: c.id,
+      label: form.department_ids.length === 1 ? c.name : `${departmentNames.get(c.department_id) ?? '—'} / ${c.name}`,
+    })),
+    // Categorías ya elegidas que ya no están activas en el catálogo: se conservan.
+    ...categoryIds.filter((id) => !knownCategoryIds.has(id)).map((id) => ({ value: id, label: `Categoría #${id} (inactiva)` })),
+  ];
+  const subcategorySource = categoryIds.length
+    ? catalog.categories.filter((c) => categoryIds.includes(c.id))
+    : scopedCategories;
+  const knownSubcategoryIds = new Set(catalog.categories.flatMap((c) => c.subcategories.map((s) => s.id)));
+  const subcategoryOptions = [
+    ...subcategorySource.flatMap((c) => c.subcategories.map((s) => ({ value: s.id, label: `${c.name} / ${s.name}` }))),
+    ...subcategoryIds
+      .filter((id) => !knownSubcategoryIds.has(id))
+      .map((id) => ({ value: id, label: `Subcategoría #${id} (inactiva)` })),
+  ];
+
+  /** Al cambiar departamentos o categorías se retiran las selecciones que quedan fuera de alcance. */
+  function setDepartments(departmentIds: number[]) {
+    const allowedCategories = new Set(inScope(departmentIds).map((c) => c.id));
+    const nextCategories = categoryIds.filter((id) => !knownCategoryIds.has(id) || allowedCategories.has(id));
+    setForm((prev) => ({
+      ...prev,
+      department_ids: departmentIds,
+      category_ids: nextCategories,
+      subcategory_ids: pruneSubcategories(nextCategories, departmentIds),
+    }));
+  }
+  function setCategories(nextCategories: number[]) {
+    setForm((prev) => ({
+      ...prev,
+      category_ids: nextCategories,
+      subcategory_ids: pruneSubcategories(nextCategories, prev.department_ids),
+    }));
+  }
+  function pruneSubcategories(nextCategories: number[], departmentIds: number[]): number[] {
+    const source = nextCategories.length
+      ? catalog.categories.filter((c) => nextCategories.includes(c.id))
+      : inScope(departmentIds);
+    const allowed = new Set(source.flatMap((c) => c.subcategories.map((s) => s.id)));
+    return subcategoryIds.filter((id) => !knownSubcategoryIds.has(id) || allowed.has(id));
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -178,7 +238,9 @@ function PolicyForm({
             value={form.precedence}
             onChange={(e) => set('precedence', Math.max(0, Number(e.target.value) || 0))}
           />
-          <span className="field-hint">Menor número = se evalúa antes. Gana la primera política que cumpla.</span>
+          <span className="field-hint">
+            Gana siempre la más específica (subcategoría, luego categoría, luego las generales). Dentro del mismo nivel, menor número = se evalúa antes.
+          </span>
         </label>
       </div>
 
@@ -203,8 +265,44 @@ function PolicyForm({
           .sort((a, b) => a.name.localeCompare(b.name, 'es'))
           .map((d) => ({ value: d.id, label: d.name }))}
         value={form.department_ids}
-        onChange={(v) => set('department_ids', v)}
+        onChange={setDepartments}
       />
+      {categoryOptions.length > 0 ? (
+        <CheckboxGroup
+          legend="Categorías"
+          hint={
+            form.department_ids.length
+              ? 'Categorías de los departamentos elegidos. Sin selección = cualquier categoría.'
+              : 'Sin selección = cualquier categoría. Elija departamentos para acotar la lista.'
+          }
+          options={categoryOptions}
+          value={categoryIds}
+          onChange={setCategories}
+        />
+      ) : (
+        <p className="field-hint">
+          {form.department_ids.length
+            ? 'Los departamentos elegidos no tienen categorías activas.'
+            : 'No hay categorías en el catálogo de servicio.'}
+        </p>
+      )}
+      {subcategoryOptions.length > 0 && (
+        <CheckboxGroup
+          legend="Subcategorías"
+          hint={
+            categoryIds.length
+              ? 'Subcategorías de las categorías elegidas. Sin selección = cualquiera.'
+              : 'Sin selección = cualquiera. Elija categorías para acotar la lista.'
+          }
+          options={subcategoryOptions}
+          value={subcategoryIds}
+          onChange={(v) => set('subcategory_ids', v)}
+        />
+      )}
+      <label className="checkbox">
+        <input type="checkbox" checked={form.vip_only ?? false} onChange={(e) => set('vip_only', e.target.checked)} />
+        Solo tickets de solicitantes VIP
+      </label>
       <CheckboxGroup
         legend="Pausar el reloj en categorías"
         hint="Mientras el ticket esté en estas categorías el tiempo no corre (p. ej. esperando al solicitante)."
@@ -234,7 +332,7 @@ function PolicyForm({
         </button>
       </div>
       <p className="field-hint">
-        Los cambios aplican a tickets nuevos y a los que cambien de prioridad. Use «Recalcular tickets abiertos» para
+        Los cambios aplican a tickets nuevos y a los que cambien de prioridad o categoría. Use «Recalcular tickets abiertos» para
         aplicarlos a los tickets en curso.
       </p>
     </form>
@@ -254,7 +352,11 @@ export default function PoliciesSection({ canEdit }: { canEdit: boolean }) {
     const types = new Map(catalog?.ticket_types.map((t) => [t.key, t.name]) ?? []);
     const departments = new Map(catalog?.departments.map((d) => [d.id, d.name]) ?? []);
     const states = new Map(catalog?.workflow.states.map((s) => [s.key, s.name]) ?? []);
-    return { priorities, types, departments, states };
+    const categories = new Map(catalog?.categories.map((c) => [c.id, c.name]) ?? []);
+    const subcategories = new Map(
+      catalog?.categories.flatMap((c) => c.subcategories.map((s) => [s.id, `${c.name} / ${s.name}`] as const)) ?? [],
+    );
+    return { priorities, types, departments, states, categories, subcategories };
   }, [catalog]);
 
   async function save(value: SlaPolicyInput) {
@@ -396,6 +498,15 @@ export default function PoliciesSection({ canEdit }: { canEdit: boolean }) {
                         {p.department_ids.length > 0 && (
                           <Chips items={p.department_ids.map((id) => names.departments.get(id) ?? `#${id}`)} />
                         )}
+                        {(p.category_ids?.length ?? 0) > 0 && (
+                          <Chips items={p.category_ids.map((id) => names.categories.get(id) ?? `Categoría #${id}`)} />
+                        )}
+                        {(p.subcategory_ids?.length ?? 0) > 0 && (
+                          <Chips
+                            items={p.subcategory_ids.map((id) => names.subcategories.get(id) ?? `Subcategoría #${id}`)}
+                          />
+                        )}
+                        {p.vip_only && <span className="badge badge-warning">Solo VIP</span>}
                       </div>
                     </td>
                     <td className="text-sm">{p.calendar_name ?? '—'}</td>

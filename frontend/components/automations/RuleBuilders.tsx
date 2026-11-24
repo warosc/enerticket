@@ -358,6 +358,23 @@ function ActionEditor({
           </span>
         </label>
       )}
+      {(action.type === 'transition' || action.type === 'request_approval') &&
+        catalog.workflow.states.some((s) => s.key === action.to_state && s.category === 'done') && (
+          <label className="field">
+            <span className="field-label">Solución</span>
+            <textarea
+              className="textarea"
+              style={{ minHeight: 64 }}
+              value={action.body ?? ''}
+              maxLength={4000}
+              placeholder="Resuelto automáticamente por una regla de automatización"
+              onChange={(e) => set({ body: e.target.value })}
+            />
+            <span className="field-hint">
+              Resolver exige una solución. Se usa solo si el ticket aún no tiene una; admite variables como {'{{ticket.key}}'}.
+            </span>
+          </label>
+        )}
       {action.type === 'add_comment' && (
         <>
           <label className="field">

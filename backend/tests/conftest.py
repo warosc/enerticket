@@ -247,14 +247,35 @@ def create_ticket(client: TestClient, ids: dict[str, Any]) -> Callable[..., dict
     return factory
 
 
+# Estados de categoría ``done`` del flujo por defecto: resolver exige solución (Fase 3).
+DONE_STATES = frozenset({"resolved", "closed"})
+DEFAULT_RESOLUTION_NOTE = "Solución aplicada (prueba)"
+_AUTO = object()
+
+
 @pytest.fixture
 def transition(client: TestClient) -> Callable[..., Any]:
-    """Fábrica: ``transition(persona, ticket_id, "in_progress", comment=None)`` → Response."""
+    """Fábrica: ``transition(persona, ticket_id, "in_progress", comment=None)`` → Response.
 
-    def factory(persona: Persona, ticket_id: int, to_state: str, comment: str | None = None):
+    Al pasar a un estado ``done`` envía una ``resolution_note`` por defecto; con
+    ``resolution_note=None`` no la envía (para probar la validación) y con un texto usa ese.
+    """
+
+    def factory(
+        persona: Persona,
+        ticket_id: int,
+        to_state: str,
+        comment: str | None = None,
+        resolution_note: Any = _AUTO,
+    ):
         body: dict[str, Any] = {"to_state_key": to_state}
         if comment is not None:
             body["comment"] = comment
+        if resolution_note is _AUTO:
+            if to_state in DONE_STATES:
+                body["resolution_note"] = DEFAULT_RESOLUTION_NOTE
+        elif resolution_note is not None:
+            body["resolution_note"] = resolution_note
         return client.post(f"/tickets/{ticket_id}/transition", json=body, headers=persona.headers)
 
     return factory

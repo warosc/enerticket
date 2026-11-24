@@ -11,15 +11,22 @@
 #      el realm (importado con --import-realm desde realm-energuate.json).
 #   2. (opcional, KC_WEB_URLS) fija redirect URIs / web origins / post-logout
 #      del cliente público servicedesk-web (PKCE S256, sin direct grants).
-#   3. Crea los grupos de equipo de SEED_TEAM_GROUPS si no existen.
-#   4. (opcional, KC_LAB_USERS=true) crea/actualiza usuarios locales de
-#      laboratorio (los mismos nombres que los usuarios demo del backend). Con
-#      KC_LAB_USERS distinto de true los deshabilita si existen.
-#   5. (opcional, LDAP_URL definido) crea/actualiza la federación con el Active
-#      Directory real de Energuate (vendor ad, READ_ONLY) y su mapper de grupos
-#      (group-ldap-mapper, READ_ONLY); prueba la conexión y sincroniza grupos.
-#   6. Asigna roles de realm a grupos según KC_GROUP_ROLE_MAP.
-#   7. Asigna el tema de login KC_LOGIN_THEME (por defecto "energuate", montado
+#   3. Crea los grupos de equipo de SEED_TEAM_GROUPS y el grupo VIP (VIP_GROUP,
+#      por defecto GG-SD-VIP; vacío = no se crea) si no existen.
+#   4. Atributo "department" (departamento del AD): lo declara en el perfil de
+#      usuario de Keycloak 26 (sin esto Keycloak descarta los atributos no
+#      declarados) y crea el protocol mapper "department" del cliente web, que lo
+#      envía como claim "department" en el access token, el id token y userinfo.
+#   5. (opcional, KC_LAB_USERS=true) crea/actualiza usuarios locales de
+#      laboratorio (los mismos nombres que los usuarios demo del backend, con su
+#      atributo department). Con KC_LAB_USERS distinto de true los deshabilita.
+#   6. (opcional, LDAP_URL definido) crea/actualiza la federación con el Active
+#      Directory real de Energuate (vendor ad, READ_ONLY), su mapper de grupos
+#      (group-ldap-mapper, READ_ONLY) y el mapper del atributo department
+#      (user-attribute-ldap-mapper, LDAP_DEPARTMENT_ATTRIBUTE); prueba la
+#      conexión y sincroniza grupos.
+#   7. Asigna roles de realm a grupos según KC_GROUP_ROLE_MAP.
+#   8. Asigna el tema de login KC_LOGIN_THEME (por defecto "energuate", montado
 #      en /opt/keycloak/themes/energuate) si está instalado; vacío = no tocar.
 #
 # Ninguna credencial está en el repositorio: todo llega por variables de
@@ -46,6 +53,15 @@ KC_LAB_GROUP_APPROVERS=${KC_LAB_GROUP_APPROVERS:-GG-SD-Aprobadores}
 KC_LAB_GROUP_TELECOM=${KC_LAB_GROUP_TELECOM:-GG-SD-Telecomunicaciones}
 KC_LAB_GROUP_NETWORK=${KC_LAB_GROUP_NETWORK:-GG-SD-SeguridadRedes}
 KC_LAB_GROUP_SOC=${KC_LAB_GROUP_SOC:-GG-SD-SOC}
+
+# Grupo AD de usuarios VIP (mismo valor que VIP_GROUP del backend). Se crea en
+# Keycloak si no existe (con AD, el mapper de grupos lo vincula por nombre).
+# Definido pero vacío = no se crea.
+KC_VIP_GROUP=${VIP_GROUP-GG-SD-VIP}
+
+# Atributo de usuario de Keycloak (y claim del token) con el departamento del AD.
+# El backend lee el claim "department": no cambiar sin ajustar el backend.
+DEPARTMENT_USER_ATTRIBUTE=department
 
 # Cliente público del portal: URL(s) base del frontend separadas por comas.
 # Se fuerzan en cada ejecución (redirect URIs, web origins y post-logout), de
@@ -76,10 +92,14 @@ LDAP_BATCH_SIZE=${LDAP_BATCH_SIZE:-500}
 LDAP_FULL_SYNC_PERIOD=${LDAP_FULL_SYNC_PERIOD:-86400}
 LDAP_CHANGED_SYNC_PERIOD=${LDAP_CHANGED_SYNC_PERIOD:-3600}
 LDAP_SYNC_USERS_ON_START=${LDAP_SYNC_USERS_ON_START:-false}
+# Atributo LDAP con el departamento del usuario (en AD suele ser "department").
+# Definido pero vacío = no se crea el mapper.
+LDAP_DEPARTMENT_ATTRIBUTE=${LDAP_DEPARTMENT_ATTRIBUTE-department}
 
 LDAP_STORAGE_TYPE=org.keycloak.storage.UserStorageProvider
 LDAP_MAPPER_TYPE=org.keycloak.storage.ldap.mappers.LDAPStorageMapper
 LDAP_GROUP_MAPPER_NAME=groups-ad
+LDAP_DEPARTMENT_MAPPER_NAME=department-ad
 VALID_ROLES="admin agent approver requester"
 
 # Arranque más rápido de la JVM de kcadm.sh (se invoca muchas veces).
@@ -246,16 +266,18 @@ find_user_id() {
 }
 
 # Usuarios de laboratorio, coherentes con los usuarios demo del backend
-# (app/seeds/90_core_demo.py). Formato: usuario|nombre|apellido|roles|grupos
+# (app/seeds/90_core_demo.py y 95_catalog_demo.py).
+# Formato: usuario|nombre|apellido|roles|grupos|departamento (atributo AD "department",
+# tal como llegaría del directorio: con prefijo numérico, mayúsculas, etc.).
 lab_user_specs() {
     cat <<EOF
-demo.admin|Administrador|Demo|admin,agent|$KC_LAB_GROUP_ADMINS,$KC_LAB_GROUP_AGENTS
-ana.telecom|Ana|López|agent|$KC_LAB_GROUP_AGENTS,$KC_LAB_GROUP_TELECOM
-luis.soc|Luis|Pérez|agent|$KC_LAB_GROUP_AGENTS,$KC_LAB_GROUP_SOC
-rosa.redes|Rosa|Méndez|agent|$KC_LAB_GROUP_AGENTS,$KC_LAB_GROUP_NETWORK
-marta.aprobadora|Marta|Díaz|approver|$KC_LAB_GROUP_APPROVERS
-carlos.solicitante|Carlos|Ramírez|requester|
-sofia.solicitante|Sofía|Hernández|requester|
+demo.admin|Administrador|Demo|admin,agent|$KC_LAB_GROUP_ADMINS,$KC_LAB_GROUP_AGENTS|Sistemas y Telecomunicaciones
+ana.telecom|Ana|López|agent|$KC_LAB_GROUP_AGENTS,$KC_LAB_GROUP_TELECOM|Telecomunicaciones
+luis.soc|Luis|Pérez|agent|$KC_LAB_GROUP_AGENTS,$KC_LAB_GROUP_SOC|SISTEMAS Y TELECOMUNICACIONES
+rosa.redes|Rosa|Méndez|agent|$KC_LAB_GROUP_AGENTS,$KC_LAB_GROUP_NETWORK|SISTEMAS Y TELECOMUNICACIONES
+marta.aprobadora|Marta|Díaz|approver|$KC_LAB_GROUP_APPROVERS|SERVICIOS CORPORATIVOS
+carlos.solicitante|Carlos|Ramírez|requester||07 COMERCIAL
+sofia.solicitante|Sofía|Hernández|requester|$KC_VIP_GROUP|DISTRIBUCION
 EOF
 }
 
@@ -274,10 +296,14 @@ disable_user_if_enabled() {
 }
 
 upsert_lab_user() {
-    _user=$1 _first=$2 _last=$3 _roles=$4 _groups=$5
+    _user=$1 _first=$2 _last=$3 _roles=$4 _groups=$5 _department=${6:-}
     _email="$_user@$KC_LAB_EMAIL_DOMAIN"
+    _attributes=""
+    if [ -n "$_department" ]; then
+        _attributes=",\"attributes\":{\"$DEPARTMENT_USER_ATTRIBUTE\":[\"$(json_escape "$_department")\"]}"
+    fi
     cat >"$WORKDIR/user.json" <<EOF
-{"username":"$(json_escape "$_user")","enabled":true,"emailVerified":true,"firstName":"$(json_escape "$_first")","lastName":"$(json_escape "$_last")","email":"$(json_escape "$_email")","requiredActions":[]}
+{"username":"$(json_escape "$_user")","enabled":true,"emailVerified":true,"firstName":"$(json_escape "$_first")","lastName":"$(json_escape "$_last")","email":"$(json_escape "$_email")","requiredActions":[]$_attributes}
 EOF
     _uid=$(find_user_id "$_user")
     if [ -z "$_uid" ]; then
@@ -326,12 +352,12 @@ configure_lab_users() {
         [ -n "$KC_LAB_PASSWORD" ] || die "KC_LAB_USERS=true requiere KC_LAB_PASSWORD"
         is_placeholder "$KC_LAB_PASSWORD" && die "KC_LAB_PASSWORD conserva el valor de ejemplo; defina una contraseña propia"
         log "KC_LAB_USERS=true: creando/actualizando usuarios de laboratorio (solo para entornos aislados)"
-        while IFS='|' read -r _u _f _l _r _g || [ -n "$_u" ]; do
+        while IFS='|' read -r _u _f _l _r _g _d || [ -n "$_u" ]; do
             [ -n "$_u" ] || continue
-            upsert_lab_user "$_u" "$_f" "$_l" "$_r" "$_g"
+            upsert_lab_user "$_u" "$_f" "$_l" "$_r" "$_g" "$_d"
         done <"$WORKDIR/lab-users.txt"
     else
-        while IFS='|' read -r _u _f _l _r _g || [ -n "$_u" ]; do
+        while IFS='|' read -r _u _f _l _r _g _d || [ -n "$_u" ]; do
             [ -n "$_u" ] || continue
             disable_user_if_enabled "$_u" "KC_LAB_USERS desactivado"
         done <"$WORKDIR/lab-users.txt"
@@ -367,6 +393,96 @@ ensure_team_groups() {
         ensure_group "$_group" >/dev/null
     done
     log "grupos de equipo presentes en Keycloak (SEED_TEAM_GROUPS)"
+}
+
+# Grupo de usuarios VIP (VIP_GROUP). El backend marca users.vip en cada login según
+# la pertenencia a este grupo (claim "groups").
+ensure_vip_group() {
+    _vip=$(trim "$KC_VIP_GROUP")
+    if [ -z "$_vip" ]; then
+        log "VIP_GROUP vacío: no se crea grupo VIP"
+        return 0
+    fi
+    ensure_group "$_vip" >/dev/null
+    log "grupo VIP '$_vip' presente en Keycloak"
+}
+
+# --- atributo department (perfil de usuario y claim) -------------------------------
+
+# Keycloak 24+ tiene el perfil de usuario declarativo siempre activo: un atributo que no
+# está declarado (y con unmanagedAttributePolicy desactivada, el valor por defecto) se
+# descarta al guardar el usuario desde la API de administración. Se declara "department"
+# (lectura para el usuario y administradores, edición solo administradores; con AD lo
+# fija el mapper LDAP en modo solo lectura). Idempotente: si ya existe no se toca.
+ensure_department_profile() {
+    if ! kc get users/profile -r "$KC_REALM" >"$WORKDIR/user-profile.json" 2>"$WORKDIR/user-profile.err"; then
+        warn "no se pudo leer el perfil de usuario del realm: $(tr '\n' ' ' <"$WORKDIR/user-profile.err")"
+        warn "declare a mano el atributo '$DEPARTMENT_USER_ATTRIBUTE' en Realm settings > User profile"
+        return 0
+    fi
+    # JSON en una sola línea (los saltos de línea de la salida de kcadm son solo formato).
+    tr -d '\r\n' <"$WORKDIR/user-profile.json" >"$WORKDIR/user-profile.flat"
+    if grep -q "\"name\"[[:space:]]*:[[:space:]]*\"$DEPARTMENT_USER_ATTRIBUTE\"" "$WORKDIR/user-profile.flat"; then
+        log "perfil de usuario: el atributo '$DEPARTMENT_USER_ATTRIBUTE' ya está declarado"
+        return 0
+    fi
+    _attr="{\"name\":\"$DEPARTMENT_USER_ATTRIBUTE\",\"displayName\":\"Departamento (AD)\",\"validations\":{\"length\":{\"max\":255}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]},\"multivalued\":false}"
+    if grep -q '"attributes"[[:space:]]*:[[:space:]]*\[[[:space:]]*\]' "$WORKDIR/user-profile.flat"; then
+        sed "s/\"attributes\"[[:space:]]*:[[:space:]]*\[[[:space:]]*\]/\"attributes\":[$_attr]/" \
+            "$WORKDIR/user-profile.flat" >"$WORKDIR/user-profile.new"
+    elif grep -q '"attributes"[[:space:]]*:[[:space:]]*\[' "$WORKDIR/user-profile.flat"; then
+        # Primera aparición de "attributes": [ = la lista de nivel superior del perfil.
+        sed "s/\"attributes\"[[:space:]]*:[[:space:]]*\[/\"attributes\":[$_attr,/" \
+            "$WORKDIR/user-profile.flat" >"$WORKDIR/user-profile.new"
+    else
+        warn "formato inesperado del perfil de usuario; declare a mano el atributo '$DEPARTMENT_USER_ATTRIBUTE'"
+        return 0
+    fi
+    kc update users/profile -r "$KC_REALM" -f "$WORKDIR/user-profile.new"
+    log "perfil de usuario: atributo '$DEPARTMENT_USER_ATTRIBUTE' declarado (edición solo administradores)"
+}
+
+# Protocol mapper del cliente web: atributo de usuario "department" -> claim "department"
+# (cadena) en access token, id token, userinfo e introspección. Se crea también sin AD
+# (usuarios de laboratorio). Idempotente: si existe se fuerza su configuración.
+ensure_department_claim_mapper() {
+    _cid=$(kc get clients -r "$KC_REALM" -q clientId="$KC_WEB_CLIENT_ID" --fields id --format csv --noquotes | first_id)
+    if [ -z "$_cid" ]; then
+        warn "no existe el cliente '$KC_WEB_CLIENT_ID': no se crea el mapper del claim department"
+        return 0
+    fi
+    _mid=$(kc get "clients/$_cid/protocol-mappers/models" -r "$KC_REALM" --fields id,name --format csv --noquotes \
+        | tr -d '\r' | sed -n "s/^\\([^,]*\\),$DEPARTMENT_USER_ATTRIBUTE\$/\\1/p" | first_id)
+    _id_field=""
+    [ -n "$_mid" ] && _id_field="\"id\":\"$_mid\","
+    cat >"$WORKDIR/department-claim.json" <<EOF
+{
+  $_id_field
+  "name": "$DEPARTMENT_USER_ATTRIBUTE",
+  "protocol": "openid-connect",
+  "protocolMapper": "oidc-usermodel-attribute-mapper",
+  "consentRequired": false,
+  "config": {
+    "user.attribute": "$DEPARTMENT_USER_ATTRIBUTE",
+    "claim.name": "department",
+    "jsonType.label": "String",
+    "multivalued": "false",
+    "aggregate.attrs": "false",
+    "id.token.claim": "true",
+    "access.token.claim": "true",
+    "userinfo.token.claim": "true",
+    "introspection.token.claim": "true",
+    "lightweight.claim": "false"
+  }
+}
+EOF
+    if [ -z "$_mid" ]; then
+        kc create "clients/$_cid/protocol-mappers/models" -r "$KC_REALM" -f "$WORKDIR/department-claim.json"
+        log "cliente '$KC_WEB_CLIENT_ID': mapper del claim 'department' creado"
+    else
+        kc update "clients/$_cid/protocol-mappers/models/$_mid" -r "$KC_REALM" -f "$WORKDIR/department-claim.json"
+        log "cliente '$KC_WEB_CLIENT_ID': mapper del claim 'department' actualizado"
+    fi
 }
 
 # --- cliente público del portal ----------------------------------------------------
@@ -529,6 +645,10 @@ validate_ldap_settings() {
         esac
     fi
 
+    case $(trim "$LDAP_DEPARTMENT_ATTRIBUTE") in
+        *[!A-Za-z0-9-]*) die "LDAP_DEPARTMENT_ATTRIBUTE debe ser un nombre de atributo LDAP (letras, dígitos y '-'), p. ej. department" ;;
+    esac
+
     is_uint "$LDAP_CONNECTION_TIMEOUT" || die "LDAP_CONNECTION_TIMEOUT debe ser un entero positivo (ms)"
     is_uint "$LDAP_READ_TIMEOUT" || die "LDAP_READ_TIMEOUT debe ser un entero positivo (ms)"
     is_uint "$LDAP_BATCH_SIZE" || die "LDAP_BATCH_SIZE debe ser un entero positivo"
@@ -630,6 +750,57 @@ write_group_mapper_json() {
 EOF
 }
 
+# Mapper del departamento: atributo LDAP (LDAP_DEPARTMENT_ATTRIBUTE) -> atributo de
+# usuario "department", solo lectura y leído siempre del AD (un cambio de departamento
+# en el directorio llega en el siguiente login sin esperar la sincronización).
+write_department_mapper_json() {
+    _id_field=""
+    [ -n "${2:-}" ] && _id_field="\"id\":\"$2\","
+    cat >"$WORKDIR/department-mapper.json" <<EOF
+{
+  $_id_field
+  "name": "$LDAP_DEPARTMENT_MAPPER_NAME",
+  "providerId": "user-attribute-ldap-mapper",
+  "providerType": "$LDAP_MAPPER_TYPE",
+  "parentId": "$1",
+  "config": {
+    "user.model.attribute": ["$DEPARTMENT_USER_ATTRIBUTE"],
+    "ldap.attribute": ["$(json_escape "$LDAP_DEPARTMENT_ATTRIBUTE")"],
+    "read.only": ["true"],
+    "always.read.value.from.ldap": ["true"],
+    "is.mandatory.in.ldap": ["false"],
+    "is.binary.attribute": ["false"],
+    "attribute.force.default": ["false"]
+  }
+}
+EOF
+}
+
+configure_department_ldap_mapper() {
+    _ldap_id=$1
+    _attr=$(trim "$LDAP_DEPARTMENT_ATTRIBUTE")
+    _dep_mapper_id=$(kc get components -r "$KC_REALM" -q parent="$_ldap_id" -q type="$LDAP_MAPPER_TYPE" \
+        -q name="$LDAP_DEPARTMENT_MAPPER_NAME" --fields id --format csv --noquotes | first_id)
+    if [ -z "$_attr" ]; then
+        if [ -n "$_dep_mapper_id" ]; then
+            warn "LDAP_DEPARTMENT_ATTRIBUTE vacío: se conserva el mapper '$LDAP_DEPARTMENT_MAPPER_NAME' existente (bórrelo en la consola si no lo quiere)"
+        else
+            log "LDAP_DEPARTMENT_ATTRIBUTE vacío: no se mapea el departamento del AD"
+        fi
+        return 0
+    fi
+    LDAP_DEPARTMENT_ATTRIBUTE=$_attr
+    if [ -z "$_dep_mapper_id" ]; then
+        write_department_mapper_json "$_ldap_id" ""
+        _dep_mapper_id=$(kc create components -r "$KC_REALM" -f "$WORKDIR/department-mapper.json" -i)
+        log "mapper de departamento '$LDAP_DEPARTMENT_MAPPER_NAME' creado ($LDAP_DEPARTMENT_ATTRIBUTE -> $DEPARTMENT_USER_ATTRIBUTE, id $_dep_mapper_id)"
+    else
+        write_department_mapper_json "$_ldap_id" "$_dep_mapper_id"
+        kc update "components/$_dep_mapper_id" -r "$KC_REALM" -f "$WORKDIR/department-mapper.json"
+        log "mapper de departamento '$LDAP_DEPARTMENT_MAPPER_NAME' actualizado ($LDAP_DEPARTMENT_ATTRIBUTE -> $DEPARTMENT_USER_ATTRIBUTE)"
+    fi
+}
+
 test_ldap_connection() {
     cat >"$WORKDIR/ldap-test.json" <<EOF
 {"action":"testAuthentication","componentId":"$1","connectionUrl":"$(json_escape "$LDAP_URL")","authType":"simple","bindDn":"$(json_escape "$LDAP_BIND_DN")","bindCredential":"$(json_escape "$LDAP_BIND_CREDENTIAL")","useTruststoreSpi":"always","connectionTimeout":"$LDAP_CONNECTION_TIMEOUT","startTls":"$(bool "$LDAP_START_TLS")"}
@@ -682,6 +853,8 @@ configure_ldap() {
         warn "LDAP_GROUPS_DN vacío: no se crea el mapper de grupos; los usuarios de AD solo tendrán el rol requester"
     fi
 
+    configure_department_ldap_mapper "$LDAP_ID"
+
     if ! test_ldap_connection "$LDAP_ID"; then
         warn "se omite la sincronización inicial; Keycloak reintentará en la próxima sincronización periódica o al iniciar sesión"
         return 0
@@ -716,6 +889,10 @@ main() {
     configure_web_client
     harden_offline_access
     ensure_team_groups
+    ensure_vip_group
+    # El perfil debe declarar "department" ANTES de crear/actualizar usuarios de laboratorio.
+    ensure_department_profile
+    ensure_department_claim_mapper
     configure_lab_users
     configure_ldap
     apply_group_role_map

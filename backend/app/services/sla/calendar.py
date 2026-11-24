@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from functools import cached_property
+from functools import cached_property, lru_cache
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -257,3 +257,26 @@ def is_24x7_windows(windows: Sequence[Mapping[str, Any]]) -> bool:
     normalized = normalize_windows(windows)
     days = {w["weekday"] for w in normalized if w["start"] == "00:00" and w["end"] == "24:00"}
     return days == set(range(7))
+
+
+# --------------------------------------------------------------------------- calendario estándar
+
+# Nombre del calendario hábil que siembra ``seeds/10_sla.py`` (calendario por defecto).
+DEFAULT_BUSINESS_CALENDAR_NAME = "Horario hábil Guatemala"
+DEFAULT_BUSINESS_WINDOWS: tuple[dict[str, Any], ...] = tuple(
+    {"weekday": day, "start": "08:00", "end": "17:00"} for day in range(5)
+)
+
+
+def standard_business_spec(timezone_name: str, years: Iterable[int]) -> CalendarSpec:
+    """Horario hábil estándar (lunes a viernes 08:00-17:00) con los feriados oficiales de
+    ``years``. Se usa cuando no existe el calendario hábil por defecto en la base de datos."""
+    return _standard_spec_cached(timezone_name, tuple(sorted(set(years))))
+
+
+@lru_cache(maxsize=32)
+def _standard_spec_cached(timezone_name: str, years: tuple[int, ...]) -> CalendarSpec:
+    from app.services.sla.holidays_gt import official_holidays
+
+    days = [day for year in years for day, _name in official_holidays(year)]
+    return CalendarSpec.build(timezone_name, DEFAULT_BUSINESS_WINDOWS, holidays=days)

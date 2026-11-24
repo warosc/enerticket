@@ -1,6 +1,7 @@
 'use client';
 
 import { EmptyState } from '@/components/ui';
+import { channelLabel, subcategoryLabels } from '@/lib/catalog';
 import { formatDateTime } from '@/lib/format';
 import type { Catalog, JsonObject, TicketHistoryEntry, UserRef } from '@/lib/types';
 
@@ -30,6 +31,12 @@ const FIELD_LABELS: Record<string, string> = {
   team_id: 'Equipo',
   assignee_id: 'Asignado',
   project_id: 'Proyecto',
+  category_id: 'Categoría',
+  subcategory_id: 'Subcategoría',
+  provider_id: 'Proveedor',
+  channel: 'Canal',
+  resolution_note: 'Solución',
+  work_order_id: 'Orden de trabajo',
 };
 
 function isObject(value: unknown): value is JsonObject {
@@ -54,10 +61,19 @@ function describeValue(field: string, value: unknown, catalog: Catalog | null, u
         const project = catalog.projects.find((p) => p.id === value);
         return project ? `${project.code} — ${project.name}` : `#${String(value)}`;
       }
+      case 'category_id':
+        return catalog.categories.find((c) => c.id === value)?.name ?? `#${String(value)}`;
+      case 'subcategory_id':
+        return subcategoryLabels(catalog).get(Number(value)) ?? `#${String(value)}`;
+      case 'provider_id':
+        return catalog.providers.find((p) => p.id === value)?.name ?? `#${String(value)}`;
+      case 'channel':
+        return channelLabel(String(value), catalog);
       default:
         break;
     }
   }
+  if (field === 'channel') return channelLabel(String(value));
   if (field === 'assignee_id') return users.find((u) => u.id === value)?.display_name ?? `usuario #${String(value)}`;
   if (field === 'description') return '(texto actualizado)';
   if (typeof value === 'object') return JSON.stringify(value);
@@ -110,6 +126,14 @@ function describeChanges(entry: TicketHistoryEntry, catalog: Catalog | null, use
     if (JSON.stringify(from) === JSON.stringify(to)) continue;
     if (field === 'description') {
       lines.push('Descripción actualizada');
+      continue;
+    }
+    if (field === 'resolution_note') {
+      lines.push(from ? 'Solución actualizada' : 'Solución registrada');
+      continue;
+    }
+    if (field === 'work_order_id') {
+      if (to) lines.push(`Trasladado a orden de trabajo #${String(to)}`);
       continue;
     }
     lines.push(

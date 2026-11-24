@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.core.db import get_db, utcnow
 from app.core.permissions import visible_tickets_filter
 from app.core.security import Principal, get_principal, require_roles
+from app.models.catalog import TicketCategory, TicketSubcategory
 from app.models.core import Department, Priority, Ticket, TicketType, WorkflowState
 from app.models.sla import BusinessCalendar, CalendarHoliday, SlaInstance, SlaPolicy
 from app.services import tickets as ticket_svc
@@ -36,6 +37,7 @@ from app.services.sla.engine import (
     STATUS_RUNNING,
     SpecCache,
     ensure_ticket_sla,
+    policy_sort_key,
     refresh_calendar_targets,
     remaining_business_seconds,
 )
@@ -317,6 +319,8 @@ def _validate_policy_refs(session: Session, values: dict[str, Any]) -> None:
         ("priority_keys", Priority.key, "Prioridades desconocidas"),
         ("type_keys", TicketType.key, "Tipos de ticket desconocidos"),
         ("department_ids", Department.id, "Departamentos inexistentes"),
+        ("category_ids", TicketCategory.id, "Categorías inexistentes"),
+        ("subcategory_ids", TicketSubcategory.id, "Subcategorías inexistentes"),
         ("pause_states", WorkflowState.key, "Estados desconocidos"),
     )
     for field, column, message in checks:
@@ -347,7 +351,8 @@ def _dedupe(values: list[Any] | None) -> list[Any]:
 
 @router.get("/sla/policies", response_model=list[PolicyOut], dependencies=[Depends(require_agent)])
 def list_policies(session: Session = Depends(get_db)) -> list[dict]:
-    policies = session.scalars(select(SlaPolicy).order_by(SlaPolicy.precedence, SlaPolicy.id)).all()
+    # Mismo orden en que se evalúan (especificidad, precedencia, id).
+    policies = sorted(session.scalars(select(SlaPolicy)).all(), key=policy_sort_key)
     return [policy_out(session, p) for p in policies]
 
 
@@ -376,6 +381,9 @@ def create_policy(payload: PolicyIn, session: Session = Depends(get_db)) -> dict
         priority_keys=_dedupe(values.get("priority_keys")),
         type_keys=_dedupe(values.get("type_keys")),
         department_ids=_dedupe(values.get("department_ids")),
+        category_ids=_dedupe(values.get("category_ids")),
+        subcategory_ids=_dedupe(values.get("subcategory_ids")),
+        vip_only=bool(values.get("vip_only")),
         precedence=values["precedence"],
         first_response_minutes=values.get("first_response_minutes"),
         resolution_minutes=values.get("resolution_minutes"),
@@ -401,7 +409,7 @@ def update_policy(policy_id: int, payload: PolicyPatch, session: Session = Depen
         values["name"] = values["name"].strip()
         if _name_taken(session, SlaPolicy, values["name"], exclude_id=policy.id):
             raise HTTPException(status.HTTP_409_CONFLICT, detail="Ya existe una política con ese nombre")
-    for required in ("calendar_id", "precedence", "warning_threshold_pct", "active"):
+    for required in ("calendar_id", "precedence", "warning_threshold_pct", "active", "vip_only"):
         if required in values and values[required] is None:
             raise _unprocessable(f"El campo {required} no puede ser nulo")
     _validate_policy_refs(session, values)
@@ -410,7 +418,10 @@ def update_policy(policy_id: int, payload: PolicyPatch, session: Session = Depen
     if not first and not resolution:
         raise _unprocessable("Defina al menos un objetivo: primera respuesta o resolución")
     for field, value in values.items():
-        if field in ("priority_keys", "type_keys", "department_ids", "pause_categories", "pause_states"):
+        if field in (
+            "priority_keys", "type_keys", "department_ids", "category_ids", "subcategory_ids",
+            "pause_categories", "pause_states",
+        ):
             value = _dedupe(value)
         elif field == "description":
             value = (value or "").strip()

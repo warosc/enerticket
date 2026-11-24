@@ -85,10 +85,25 @@ def dataset(db, create_ticket, requester, agent, other_agent) -> dict[str, int]:
     "path",
     ["overview", "trend", "by-department", "by-assignee", "aging", "sla", "export.csv"],
 )
-def test_requester_and_approver_forbidden(client, requester, approver, path):
+def test_any_authenticated_user_can_read(client, requester, approver, path):
+    # Fase 3: /reports/* abierto a cualquier usuario autenticado; el alcance lo da la visibilidad.
     for persona in (requester, approver):
-        response = client.get(f"/reports/{path}", headers=persona.headers)
-        assert response.status_code == 403, (path, persona.username)
+        response = client.get(f"/reports/{path}", params=RANGE, headers=persona.headers)
+        assert response.status_code == 200, (path, persona.username)
+
+
+def test_requester_only_sees_own_tickets(client, requester, approver, other_requester, dataset):
+    body = client.get("/reports/overview", params=RANGE, headers=requester.headers).json()
+    assert body["created"] == 3  # T1, T2, T3 (todos de Carlos en el periodo)
+    assert body["resolved"] == 2  # T1, T5
+    assert body["backlog"] == 2
+    for persona in (approver, other_requester):
+        body = client.get("/reports/overview", params=RANGE, headers=persona.headers).json()
+        assert (body["created"], body["resolved"], body["backlog"]) == (0, 0, 0)
+    rows = _read_csv(client.get("/reports/export.csv", params=RANGE, headers=requester.headers))
+    assert len(rows) - 1 == 3
+    rows = _read_csv(client.get("/reports/export.csv", params=RANGE, headers=other_requester.headers))
+    assert len(rows) - 1 == 0
 
 
 def test_unauthenticated(client):

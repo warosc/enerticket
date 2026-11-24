@@ -3,9 +3,8 @@
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '@/components/icons';
-import { Alert, ErrorAlert, Loading, PageHeader } from '@/components/ui';
+import { Alert, ErrorAlert, Loading } from '@/components/ui';
 import { ApiError, errorMessage } from '@/lib/api';
-import { useAuth } from '@/lib/auth';
 import { formatDate, formatDateTime } from '@/lib/format';
 import { useCatalog, useDebouncedValue } from '@/lib/hooks';
 import {
@@ -52,8 +51,8 @@ function filtersToSearch(filters: ReportFilterValues): string {
   return params.toString();
 }
 
+/** Pestaña «Resumen» de /reports: tablero de indicadores del periodo (Fase 2). */
 export default function ReportsView() {
-  const { isAgent } = useAuth();
   const { catalog, error: catalogError, reload: reloadCatalog } = useCatalog();
   const router = useRouter();
   const pathname = usePathname();
@@ -90,10 +89,9 @@ export default function ReportsView() {
   }, []);
 
   useEffect(() => {
-    if (!isAgent) return;
     void load(debounced);
     return () => controllerRef.current?.abort();
-  }, [debounced, isAgent, load]);
+  }, [debounced, load]);
 
   // Mantiene los filtros en la URL para compartir/recargar el reporte.
   useEffect(() => {
@@ -114,43 +112,31 @@ export default function ReportsView() {
     }
   };
 
-  if (!isAgent) {
-    return (
-      <div className="page">
-        <PageHeader title="Reportes" />
-        <Alert tone="warning" title="Acceso restringido">
-          Los reportes están disponibles para agentes y administradores.
-        </Alert>
-      </div>
-    );
-  }
-
   return (
-    <div className={`page ${styles.root}`}>
-      <PageHeader
-        title="Reportes"
-        subtitle={`Del ${formatDate(`${filters.from}T12:00:00Z`)} al ${formatDate(`${filters.to}T12:00:00Z`)} · hora de Guatemala`}
-        actions={
-          <>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => void load(filters)}
-              disabled={loading || Boolean(rangeError)}
-            >
-              <Icon name="refresh" aria-hidden="true" /> Actualizar
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => void exportCsv()}
-              disabled={exporting || Boolean(rangeError)}
-            >
-              {exporting ? 'Exportando…' : 'Exportar CSV'}
-            </button>
-          </>
-        }
-      />
+    <div className={`stack-lg ${styles.root}`}>
+      <div className="row-between">
+        <div className="text-sm muted">
+          Del {formatDate(`${filters.from}T12:00:00Z`)} al {formatDate(`${filters.to}T12:00:00Z`)} · hora de Guatemala
+        </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void load(filters)}
+            disabled={loading || Boolean(rangeError)}
+          >
+            <Icon name="refresh" aria-hidden="true" /> Actualizar
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => void exportCsv()}
+            disabled={exporting || Boolean(rangeError)}
+          >
+            {exporting ? 'Exportando…' : 'Exportar CSV'}
+          </button>
+        </div>
+      </div>
 
       <ErrorAlert error={catalogError} onRetry={() => void reloadCatalog()} />
       <ReportFilters value={filters} onChange={setFilters} catalog={catalog} />

@@ -1,8 +1,15 @@
-"""Reportes avanzados (agentes y administradores).
+"""Reportes: tablero (resumen), generador de reportes y plantillas.
 
-Parámetros comunes: ``from`` y ``to`` (fechas ``YYYY-MM-DD`` en la zona ``TZ_BUSINESS``,
-ambas incluidas; por defecto los últimos 30 días), ``department_id`` y ``team_id``.
-Todos los datos se limitan a los tickets visibles para el usuario (``visible_tickets_filter``).
+Cualquier usuario autenticado puede usarlos: todos los datos se limitan a los tickets que
+puede ver (``visible_tickets_filter``: admin todo, agente su área, solicitante los suyos,
+aprobador/gerencia por extensión) y los filtros solo reducen ese alcance.
+
+Tablero — parámetros comunes: ``from`` y ``to`` (fechas ``YYYY-MM-DD`` en la zona
+``TZ_BUSINESS``, ambas incluidas; por defecto los últimos 30 días), ``department_id`` y ``team_id``.
+
+Generador — ``GET /reports/builder/meta``, ``POST /reports/builder/run`` y
+``POST /reports/builder/export.xlsx``. Plantillas — ``/reports/templates`` (CRUD, duplicar,
+ejecutar y exportar). Ver ``app.services.reports.builder`` y ``app.services.reports.templates``.
 """
 
 from __future__ import annotations
@@ -12,21 +19,25 @@ from collections.abc import Iterator
 from datetime import date
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal, get_db
-from app.core.security import ROLE_AGENT, Principal, require_roles
+from app.core.security import Principal, get_principal
 from app.services import reports as svc
+from app.services.reports import builder
+from app.services.reports import templates as tpl
 from app.services.reports.csv_export import iter_csv
+from app.services.reports.xlsx_export import XLSX_MEDIA_TYPE
 from app.services.storage.validation import content_disposition
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
-ReportUser = Depends(require_roles(ROLE_AGENT))
+# Cualquier usuario autenticado: el alcance lo da ``visible_tickets_filter``.
+ReportUser = Depends(get_principal)
 
 
 def report_filters(
@@ -122,3 +133,154 @@ def export_csv(filters: svc.ReportFilters = Depends(report_filters)) -> Streamin
             "Cache-Control": "private, no-store",
         },
     )
+
+
+# --------------------------------------------------------------------------- generador
+
+
+def _xlsx_response(content: bytes, filename: str) -> Response:
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": content_disposition(filename),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@router.get("/builder/meta")
+def builder_meta(principal: Principal = ReportUser, session: Session = Depends(get_db)) -> dict[str, Any]:
+    """Dimensiones, métricas, campos de fecha, periodos, límites y alcance del usuario."""
+    return builder.meta(session, principal)
+
+
+@router.post("/builder/run")
+def builder_run(
+    definition: builder.ReportDefinition,
+    principal: Principal = ReportUser,
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Ejecuta una definición (no se guarda) sobre los tickets visibles del usuario."""
+    return builder.run_report(session, principal, definition)
+
+
+@router.post(
+    "/builder/export.xlsx",
+    response_class=Response,
+    responses={200: {"content": {XLSX_MEDIA_TYPE: {}}}},
+)
+def builder_export(
+    payload: builder.ExportRequest,
+    principal: Principal = ReportUser,
+    session: Session = Depends(get_db),
+) -> Response:
+    """Excel: una hoja por sección y, si ``include_detail``, la hoja «Detalle» (máx. 50 000 filas)."""
+    content, filename, _result = tpl.render_xlsx(
+        session, principal, payload.definition,
+        include_detail=payload.include_detail, detail_columns=payload.detail_columns,
+    )
+    logger.info("Exportación .xlsx del generador por el usuario %s", principal.user_id)
+    return _xlsx_response(content, filename)
+
+
+# --------------------------------------------------------------------------- plantillas
+
+
+def _period_override(
+    period: Optional[builder.Period] = Query(default=None, description="Otro periodo para esta ejecución"),
+    date_from: Optional[date] = Query(default=None),
+    date_to: Optional[date] = Query(default=None),
+) -> dict[str, Any]:
+    return {"period": period, "date_from": date_from, "date_to": date_to}
+
+
+@router.get("/templates")
+def list_templates(principal: Principal = ReportUser, session: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    """Propias, compartidas conmigo (rol o departamento) y de fábrica (admin: todas)."""
+    return [tpl.template_out(session, principal, t) for t in tpl.list_templates(session, principal)]
+
+
+@router.post("/templates", status_code=status.HTTP_201_CREATED)
+def create_template(
+    payload: tpl.TemplateIn, principal: Principal = ReportUser, session: Session = Depends(get_db)
+) -> dict[str, Any]:
+    template = tpl.create_template(session, principal, payload)
+    session.commit()
+    return tpl.template_out(session, principal, template)
+
+
+@router.get("/templates/{template_id}")
+def get_template(
+    template_id: int, principal: Principal = ReportUser, session: Session = Depends(get_db)
+) -> dict[str, Any]:
+    return tpl.template_out(session, principal, tpl.get_template(session, principal, template_id))
+
+
+@router.patch("/templates/{template_id}")
+def update_template(
+    template_id: int,
+    payload: tpl.TemplatePatch,
+    principal: Principal = ReportUser,
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    template = tpl.get_template(session, principal, template_id, edit=True)
+    tpl.update_template(session, principal, template, payload)
+    session.commit()
+    return tpl.template_out(session, principal, template)
+
+
+@router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_template(
+    template_id: int, principal: Principal = ReportUser, session: Session = Depends(get_db)
+) -> Response:
+    template = tpl.get_template(session, principal, template_id, edit=True)
+    session.delete(template)
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/templates/{template_id}/duplicate", status_code=status.HTTP_201_CREATED)
+def duplicate_template(
+    template_id: int, principal: Principal = ReportUser, session: Session = Depends(get_db)
+) -> dict[str, Any]:
+    source = tpl.get_template(session, principal, template_id)
+    template = tpl.duplicate_template(session, principal, source)
+    session.commit()
+    return tpl.template_out(session, principal, template)
+
+
+@router.post("/templates/{template_id}/run")
+def run_template(
+    template_id: int,
+    override: dict[str, Any] = Depends(_period_override),
+    principal: Principal = ReportUser,
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Ejecuta la plantilla con el alcance de quien la ejecuta (opcional: otro periodo)."""
+    template = tpl.get_template(session, principal, template_id)
+    definition = tpl.definition_with_period(builder.parse_definition(template.definition), **override)
+    return builder.run_report(session, principal, definition)
+
+
+@router.get(
+    "/templates/{template_id}/export.xlsx",
+    response_class=Response,
+    responses={200: {"content": {XLSX_MEDIA_TYPE: {}}}},
+)
+def export_template(
+    template_id: int,
+    include_detail: bool = Query(default=True),
+    override: dict[str, Any] = Depends(_period_override),
+    principal: Principal = ReportUser,
+    session: Session = Depends(get_db),
+) -> Response:
+    """Excel de la plantilla con el alcance de quien la exporta (opcional: otro periodo)."""
+    template = tpl.get_template(session, principal, template_id)
+    definition = tpl.definition_with_period(builder.parse_definition(template.definition), **override)
+    content, filename, _result = tpl.render_xlsx(
+        session, principal, definition, include_detail=include_detail
+    )
+    logger.info("Exportación .xlsx de la plantilla %s por el usuario %s", template_id, principal.user_id)
+    return _xlsx_response(content, filename)

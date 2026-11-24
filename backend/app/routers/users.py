@@ -6,7 +6,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import String, cast, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.db import get_db
 from app.core.security import Principal, require_roles
@@ -40,14 +40,19 @@ def list_users(
     if role:
         # roles es una lista JSON; la búsqueda textual es portable (PostgreSQL y SQLite).
         stmt = stmt.where(cast(User.roles, String).like(f'%"{role}"%'))
-    return [
-        {
-            "id": u.id,
-            "username": u.username,
-            "display_name": u.display_name,
-            "email": u.email,
-            "roles": list(u.roles or []),
-            "active": u.active,
-        }
-        for u in session.scalars(stmt).all()
-    ]
+    return [user_out(u) for u in session.scalars(stmt.options(joinedload(User.department))).all()]
+
+
+def user_out(user: User) -> dict:
+    """``UserOut``: datos de la cuenta, su departamento (AD o manual) y VIP."""
+    department = user.department
+    return {
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "email": user.email,
+        "roles": list(user.roles or []),
+        "active": user.active,
+        "department": {"id": department.id, "name": department.name} if department else None,
+        "vip": bool(user.vip),
+    }

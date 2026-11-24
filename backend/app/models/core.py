@@ -36,11 +36,22 @@ class User(Base):
     roles: Mapped[list[str]] = mapped_column(JSON, default=list)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow)
+    # Departamento del usuario según el AD (claim ``department`` resuelto por alias) o asignado
+    # por un administrador; VIP por pertenencia al grupo ``VIP_GROUP``.
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    vip: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Último valor del AD (claim ``department``) normalizado: distingue un cambio real en el AD
+    # (que manda) de un ajuste manual del administrador, y permite aplicar de inmediato la
+    # asignación de un alias a quienes lo traen (migración ``0008_phase3_fixes``).
+    ad_department_value: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, index=True)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime(), nullable=True)
 
     memberships: Mapped[list["TeamMember"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    department: Mapped[Optional["Department"]] = relationship(foreign_keys=[department_id])
 
     def __repr__(self) -> str:
         return f"<User {self.id} {self.username}>"
@@ -54,8 +65,15 @@ class Department(Base):
     parent_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
     )
+    gerencia_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("gerencias.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # True = departamento de atención (recibe tickets); False = solo departamento solicitante.
+    serves_tickets: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     parent: Mapped[Optional["Department"]] = relationship(remote_side=[id])
+    gerencia: Mapped[Optional["Gerencia"]] = relationship("Gerencia")  # noqa: F821
     teams: Mapped[list["Team"]] = relationship(back_populates="department")
 
 
@@ -109,6 +127,7 @@ class TicketType(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     key: Mapped[str] = mapped_column(String(50), unique=True)
     name: Mapped[str] = mapped_column(String(100))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class Priority(Base):
@@ -173,8 +192,14 @@ class WorkflowTransition(Base):
     to_state: Mapped[WorkflowState] = relationship(foreign_keys=[to_state_id])
 
 
+TICKET_CHANNELS = ("portal", "email", "phone", "other")
+
+
 class Ticket(Base):
     __tablename__ = "tickets"
+    __table_args__ = (
+        CheckConstraint("channel IN ('portal', 'email', 'phone', 'other')", name="channel_valid"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     public_key: Mapped[Optional[str]] = mapped_column(String(30), unique=True, nullable=True)
@@ -197,15 +222,43 @@ class Ticket(Base):
     first_response_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime(), nullable=True)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime(), nullable=True)
     closed_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime(), nullable=True)
+    # --- Catálogo de servicio (0006_catalog) ---
+    category_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("ticket_categories.id"), nullable=True, index=True
+    )
+    subcategory_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("ticket_subcategories.id"), nullable=True, index=True
+    )
+    provider_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("providers.id"), nullable=True, index=True
+    )
+    channel: Mapped[str] = mapped_column(String(20), default="portal")
+    vip: Mapped[bool] = mapped_column(Boolean, default=False)
+    resolution_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolved_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    requester_department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    parent_ticket_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("tickets.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    business_resolution_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     project: Mapped[Optional[Project]] = relationship()
     type: Mapped[TicketType] = relationship()
     priority: Mapped[Priority] = relationship()
     status: Mapped[WorkflowState] = relationship()
-    department: Mapped[Department] = relationship()
+    department: Mapped[Department] = relationship(foreign_keys=[department_id])
     team: Mapped[Optional[Team]] = relationship()
     requester: Mapped[User] = relationship(foreign_keys=[requester_id])
     assignee: Mapped[Optional[User]] = relationship(foreign_keys=[assignee_id])
+    category: Mapped[Optional["TicketCategory"]] = relationship("TicketCategory")  # noqa: F821
+    subcategory: Mapped[Optional["TicketSubcategory"]] = relationship("TicketSubcategory")  # noqa: F821
+    provider: Mapped[Optional["Provider"]] = relationship("Provider")  # noqa: F821
+    resolved_by: Mapped[Optional[User]] = relationship(foreign_keys=[resolved_by_id])
+    requester_department: Mapped[Optional[Department]] = relationship(
+        foreign_keys=[requester_department_id]
+    )
 
     @property
     def key(self) -> str:

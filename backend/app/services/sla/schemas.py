@@ -161,6 +161,9 @@ class PolicyBase(BaseModel):
     priority_keys: Optional[list[str]] = Field(default=None, max_length=20)
     type_keys: Optional[list[str]] = Field(default=None, max_length=20)
     department_ids: Optional[list[int]] = Field(default=None, max_length=200)
+    category_ids: Optional[list[int]] = Field(default=None, max_length=500)
+    subcategory_ids: Optional[list[int]] = Field(default=None, max_length=1000)
+    vip_only: Optional[bool] = None
     precedence: Optional[int] = Field(default=None, ge=0, le=100000)
     first_response_minutes: Optional[int] = Field(default=None, ge=1, le=MAX_TARGET_MINUTES)
     resolution_minutes: Optional[int] = Field(default=None, ge=1, le=MAX_TARGET_MINUTES)
@@ -177,6 +180,7 @@ class PolicyIn(PolicyBase):
     precedence: int = Field(default=100, ge=0, le=100000)
     warning_threshold_pct: int = Field(default=75, ge=1, le=99)
     pause_categories: list[PauseCategory] = Field(default_factory=lambda: ["waiting"])
+    vip_only: bool = False
     active: bool = True
 
 
@@ -193,6 +197,9 @@ class PolicyOut(BaseModel):
     priority_keys: list[str]
     type_keys: list[str]
     department_ids: list[int]
+    category_ids: list[int]
+    subcategory_ids: list[int]
+    vip_only: bool
     precedence: int
     first_response_minutes: Optional[int]
     resolution_minutes: Optional[int]

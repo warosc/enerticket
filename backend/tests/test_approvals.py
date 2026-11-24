@@ -12,8 +12,17 @@ from sqlalchemy import select
 from app.core.db import Base, SessionLocal
 from app.models.approvals import ApprovalDecision, ApprovalRequest
 from app.models.automation import Notification
-from app.models.core import WorkflowState, WorkflowTransition
+from app.models.core import TicketType, WorkflowState, WorkflowTransition
 from tests.conftest import DEPARTMENT_SOC, DEPARTMENT_TELECOM
+
+
+@pytest.fixture(autouse=True)
+def change_type_enabled():
+    """Fase 3 desactiva el tipo «change» (``core.ticket_types.v2``); estas pruebas de flujos lo
+    usan como tipo con aprobación, así que lo reactivan."""
+    with SessionLocal() as session:
+        session.scalar(select(TicketType).where(TicketType.key == "change")).active = True
+        session.commit()
 
 
 @pytest.fixture

@@ -2,6 +2,13 @@
 
 Idempotente: solo crea lo que falta; no sobrescribe cambios hechos por administradores
 (salvo completar ``external_group`` de un equipo cuando está vacío).
+
+Fase 3 (marcas de una sola vez en ``seed_state``):
+- ``core.ticket_types.v2``: ``incident`` → «Incidencia», ``service_request`` → «Petición»,
+  crea ``work_order`` → «Orden de trabajo» y desactiva ``change`` y ``problem`` (no los borra).
+- ``core.departments.v2``: crea, si no existen, los departamentos de atención de TI (cada uno
+  con su «Equipo <nombre>») con ``serves_tickets=true``. No borra los existentes ni crea
+  categorías (las carga el administrador).
 """
 
 from __future__ import annotations
@@ -48,6 +55,23 @@ PRIORITIES = (
     ("critical", "Crítica", 4),
 )
 
+# Fase 3: nombres y tipos vigentes (``core.ticket_types.v2``).
+TICKET_TYPES_V2 = (
+    ("incident", "Incidencia"),
+    ("service_request", "Petición"),
+    ("work_order", "Orden de trabajo"),
+)
+DEACTIVATED_TYPES_V2 = ("change", "problem")
+
+# Fase 3: departamentos de atención de TI (``core.departments.v2``).
+DEPARTMENTS_V2 = (
+    "Sistemas Comerciales",
+    "Sistemas Corporativos",
+    "Telecomunicaciones",
+    "Seguridad Informática",
+    "Soporte Técnico",
+)
+
 DEFAULT_WORKFLOW_KEY = "default"
 
 # key, nombre, categoría, orden, inicial, final
@@ -83,6 +107,8 @@ TRANSITIONS = (
 
 
 SEED_KEY_DEPARTMENTS = "core.departments.v1"
+SEED_KEY_TYPES_V2 = "core.ticket_types.v2"
+SEED_KEY_DEPARTMENTS_V2 = "core.departments.v2"
 
 
 def _seed_departments_and_teams(session: Session) -> None:
@@ -98,7 +124,7 @@ def _seed_departments_and_teams(session: Session) -> None:
     for name in DEPARTMENTS:
         department = session.scalar(select(Department).where(Department.name == name))
         if department is None:
-            department = Department(name=name)
+            department = Department(name=name, serves_tickets=True, active=True)
             session.add(department)
             session.flush()
         team_name = f"Equipo {name}"
@@ -122,6 +148,51 @@ def _seed_types_and_priorities(session: Session) -> None:
         if session.scalar(select(Priority).where(Priority.key == key)) is None:
             session.add(Priority(key=key, name=name, rank=rank))
     session.flush()
+
+
+def _seed_types_v2(session: Session) -> None:
+    """Tipos de la Fase 3 (una sola vez: el administrador puede ajustarlos después)."""
+    if get_seed_state(session, SEED_KEY_TYPES_V2) is not None:
+        return
+    for key, name in TICKET_TYPES_V2:
+        ticket_type = session.scalar(select(TicketType).where(TicketType.key == key))
+        if ticket_type is None:
+            session.add(TicketType(key=key, name=name, active=True))
+        else:
+            ticket_type.name = name
+            ticket_type.active = True
+    for key in DEACTIVATED_TYPES_V2:
+        ticket_type = session.scalar(select(TicketType).where(TicketType.key == key))
+        if ticket_type is not None:
+            ticket_type.active = False
+    session.flush()
+    mark_seed_applied(session, SEED_KEY_TYPES_V2)
+
+
+def _seed_departments_v2(session: Session) -> None:
+    """Departamentos de atención de TI (una sola vez; no toca los existentes)."""
+    if get_seed_state(session, SEED_KEY_DEPARTMENTS_V2) is not None:
+        return
+    created: list[str] = []
+    for name in DEPARTMENTS_V2:
+        department = session.scalar(select(Department).where(Department.name == name))
+        if department is None:
+            department = Department(name=name, serves_tickets=True, active=True)
+            session.add(department)
+            session.flush()
+            created.append(name)
+        # Un departamento de atención necesita al menos un equipo (asignación por defecto).
+        has_team = session.scalar(select(Team.id).where(Team.department_id == department.id).limit(1))
+        if has_team is None:
+            session.add(
+                Team(
+                    department_id=department.id,
+                    name=f"Equipo {name}",
+                    external_group=settings.team_group_map.get(name),
+                )
+            )
+    session.flush()
+    mark_seed_applied(session, SEED_KEY_DEPARTMENTS_V2, {"created": created})
 
 
 def _seed_workflow(session: Session) -> None:
@@ -185,5 +256,7 @@ def _seed_workflow(session: Session) -> None:
 def run(session: Session) -> None:
     _seed_departments_and_teams(session)
     _seed_types_and_priorities(session)
+    _seed_types_v2(session)
+    _seed_departments_v2(session)
     _seed_workflow(session)
     logger.info("Catálogo core verificado")

@@ -44,6 +44,8 @@ export interface DevIdentity {
   name?: string;
   /** Correo opcional (X-Dev-Email). */
   email?: string;
+  /** Departamento del AD simulado (X-Dev-Department), p.ej. «07 COMERCIAL». */
+  department?: string;
 }
 
 export interface DevPreset extends DevIdentity {
@@ -141,7 +143,9 @@ function sanitizeDevIdentity(value: unknown): DevIdentity | null {
     : [];
   const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 200) : undefined;
   const email = typeof raw.email === 'string' && raw.email.trim() ? raw.email.trim() : undefined;
-  return { user, roles: Array.from(new Set(roles)), groups: Array.from(new Set(groups)), name, email };
+  const department =
+    typeof raw.department === 'string' && raw.department.trim() ? raw.department.trim().slice(0, 200) : undefined;
+  return { user, roles: Array.from(new Set(roles)), groups: Array.from(new Set(groups)), name, email, department };
 }
 
 function readStoredDevIdentity(): DevIdentity | null {
@@ -168,6 +172,9 @@ export function validateDevIdentity(identity: DevIdentity): string | null {
     return 'El usuario solo admite letras, números y los caracteres . _ @ - (máximo 150).';
   }
   if (identity.groups.some((g) => g.includes(','))) return 'Los grupos no pueden contener comas.';
+  if (identity.department && !/^[\x20-\x7e\xa0-\xff]*$/.test(identity.department)) {
+    return 'El departamento contiene caracteres no admitidos en una cabecera HTTP.';
+  }
   return null;
 }
 
@@ -186,6 +193,9 @@ function devHeaders(identity: DevIdentity): Record<string, string> {
   // Las cabeceras HTTP solo admiten ISO-8859-1; se omite el nombre si trae otros caracteres.
   if (identity.name && /^[\x20-\x7e\xa0-\xff]*$/.test(identity.name)) headers['X-Dev-Name'] = identity.name;
   if (identity.email) headers['X-Dev-Email'] = identity.email;
+  if (identity.department && /^[\x20-\x7e\xa0-\xff]*$/.test(identity.department)) {
+    headers['X-Dev-Department'] = identity.department;
+  }
   return headers;
 }
 

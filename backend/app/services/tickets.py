@@ -2,6 +2,16 @@
 
 Otros módulos pueden reutilizar estas funciones (p.ej. flows al aprobar una transición).
 Las funciones no hacen commit: el llamador decide cuándo confirmar la transacción.
+
+Catálogo de servicio (Fase 3):
+- Clasificación: ``category_id`` (activa, del departamento del ticket y que admita su tipo),
+  ``subcategory_id`` (de esa categoría), ``provider_id`` (activo y aplicable al departamento)
+  y ``channel``. Canal y proveedor solo los fija un agente/admin.
+- Al crear se copian ``requester_department_id`` y ``vip`` del solicitante.
+- Resolver (entrar en un estado ``done``) exige solución (``resolution_note``) y, si el
+  departamento tiene categorías activas y quien resuelve atiende el ticket, la categoría.
+  Se guardan ``resolved_by_id`` y ``business_resolution_minutes``; reabrir los limpia.
+- Orden de trabajo (``create_work_order``): ticket ``work_order`` hijo del original.
 """
 
 from __future__ import annotations
@@ -25,7 +35,9 @@ from app.core.permissions import (
     can_view_ticket,
 )
 from app.core.security import ROLE_ADMIN, ROLE_AGENT, Principal
+from app.models.catalog import Provider, TicketCategory, TicketSubcategory
 from app.models.core import (
+    TICKET_CHANNELS,
     Department,
     Priority,
     Project,
@@ -49,7 +61,19 @@ TICKET_LOAD_OPTIONS = (
     joinedload(Ticket.project),
     joinedload(Ticket.requester),
     joinedload(Ticket.assignee),
+    joinedload(Ticket.category),
+    joinedload(Ticket.subcategory),
+    joinedload(Ticket.provider),
+    joinedload(Ticket.resolved_by),
+    joinedload(Ticket.requester_department).joinedload(Department.gerencia),
 )
+
+CHANNEL_LABELS = {"portal": "Portal", "email": "Correo", "phone": "Teléfono", "other": "Otro"}
+DEFAULT_CHANNEL = "portal"
+WORK_ORDER_TYPE = "work_order"
+DONE_CATEGORY = "done"
+MSG_RESOLUTION_REQUIRED = "Indique la solución antes de resolver"
+MSG_CATEGORY_REQUIRED = "Clasifique el ticket (categoría) antes de resolverlo"
 
 EVENT_CREATED = "ticket.created"
 EVENT_UPDATED = "ticket.updated"
@@ -72,6 +96,10 @@ def _unprocessable(detail: str) -> HTTPException:
 
 def _user_ref(user: User | None) -> dict[str, Any] | None:
     return {"id": user.id, "display_name": user.display_name} if user else None
+
+
+def _id_name(obj: Any) -> dict[str, Any] | None:
+    return {"id": obj.id, "name": obj.name} if obj is not None else None
 
 
 def serialize_ticket(ticket: Ticket) -> dict[str, Any]:
@@ -108,15 +136,45 @@ def serialize_ticket(ticket: Ticket) -> dict[str, Any]:
         "first_response_at": ticket.first_response_at,
         "resolved_at": ticket.resolved_at,
         "closed_at": ticket.closed_at,
+        "category": _id_name(ticket.category),
+        "subcategory": _id_name(ticket.subcategory),
+        "provider": _id_name(ticket.provider),
+        "channel": ticket.channel or DEFAULT_CHANNEL,
+        "vip": bool(ticket.vip),
+        "resolution_note": ticket.resolution_note,
+        "resolved_by": _user_ref(ticket.resolved_by),
+        "requester_department": _id_name(ticket.requester_department),
+        "gerencia": (
+            _id_name(ticket.requester_department.gerencia) if ticket.requester_department else None
+        ),
+        "parent_ticket_id": ticket.parent_ticket_id,
+        "child_ticket_ids": [],
+        "business_resolution_minutes": ticket.business_resolution_minutes,
     }
+
+
+def _children_map(session: Session, ticket_ids: list[int]) -> dict[int, list[int]]:
+    result: dict[int, list[int]] = {}
+    if not ticket_ids:
+        return result
+    rows = session.execute(
+        select(Ticket.parent_ticket_id, Ticket.id)
+        .where(Ticket.parent_ticket_id.in_(ticket_ids))
+        .order_by(Ticket.id)
+    ).all()
+    for parent_id, child_id in rows:
+        result.setdefault(parent_id, []).append(child_id)
+    return result
 
 
 def serialize_tickets(session: Session, tickets: Sequence[Ticket]) -> list[dict[str, Any]]:
     """Serializa tickets aplicando los enriquecedores registrados (``register_ticket_enricher``)."""
     extras = collect_enrichments(session, tickets)
+    children = _children_map(session, [t.id for t in tickets])
     result = []
     for ticket in tickets:
         item = serialize_ticket(ticket)
+        item["child_ticket_ids"] = children.get(ticket.id, [])
         for field_name, value in extras.get(ticket.id, {}).items():
             item.setdefault(field_name, value)
         result.append(item)
@@ -153,6 +211,11 @@ def snapshot(ticket: Ticket) -> dict[str, Any]:
         "team_id": ticket.team_id,
         "assignee_id": ticket.assignee_id,
         "project_id": ticket.project_id,
+        "category_id": ticket.category_id,
+        "subcategory_id": ticket.subcategory_id,
+        "provider_id": ticket.provider_id,
+        "channel": ticket.channel,
+        "resolution_note": ticket.resolution_note,
     }
 
 
@@ -227,6 +290,85 @@ def _validate_assignee(session: Session, user_id: int) -> User:
     return user
 
 
+def _validate_service_department(session: Session, department_id: int) -> Department:
+    department = session.get(Department, department_id)
+    if department is None:
+        raise _unprocessable("El departamento no existe")
+    if not department.active or not department.serves_tickets:
+        raise _unprocessable(f"El departamento «{department.name}» no atiende tickets")
+    return department
+
+
+def validate_classification(
+    session: Session,
+    *,
+    department_id: int,
+    type_key: str | None,
+    category_id: int | None,
+    subcategory_id: int | None,
+) -> tuple[TicketCategory | None, TicketSubcategory | None]:
+    """Valida categoría/subcategoría para el departamento y tipo del ticket (422 si no).
+
+    Una subcategoría sin categoría toma la categoría a la que pertenece.
+    """
+    subcategory = None
+    if subcategory_id is not None:
+        subcategory = session.get(TicketSubcategory, subcategory_id)
+        if subcategory is None or not subcategory.active:
+            raise _unprocessable("La subcategoría no existe o está inactiva")
+        if category_id is None:
+            category_id = subcategory.category_id
+        elif subcategory.category_id != category_id:
+            raise _unprocessable("La subcategoría no pertenece a la categoría indicada")
+    category = None
+    if category_id is not None:
+        category = session.get(TicketCategory, category_id)
+        if category is None or not category.active:
+            raise _unprocessable("La categoría no existe o está inactiva")
+        if category.department_id != department_id:
+            raise _unprocessable("La categoría no pertenece al departamento del ticket")
+        if not category.admits_type(type_key):
+            type_name = session.scalar(select(TicketType.name).where(TicketType.key == type_key))
+            raise _unprocessable(
+                f"La categoría «{category.name}» no admite tickets de tipo «{type_name or type_key}»"
+            )
+    return category, subcategory
+
+
+def validate_provider(session: Session, provider_id: int, department_id: int) -> Provider:
+    provider = session.get(Provider, provider_id)
+    if provider is None or not provider.active:
+        raise _unprocessable("El proveedor no existe o está inactivo")
+    if not provider.applies_to(department_id):
+        raise _unprocessable("El proveedor no atiende el departamento del ticket")
+    return provider
+
+
+def _validate_channel(channel: str) -> str:
+    if channel not in TICKET_CHANNELS:
+        raise _unprocessable(f"Canal inválido: {channel}")
+    return channel
+
+
+def department_has_categories(
+    session: Session, department_id: int, type_key: str | None = None
+) -> bool:
+    """¿El departamento tiene categorías activas que admitan ``type_key``?
+
+    Con ``type_key`` solo cuentan las categorías sin restricción de tipo (``type_keys`` vacía)
+    o que incluyan ese tipo: si ninguna lo admite el ticket no se puede clasificar y, por lo
+    tanto, resolverlo no puede exigir categoría.
+    """
+    categories = session.scalars(
+        select(TicketCategory).where(
+            TicketCategory.department_id == department_id, TicketCategory.active.is_(True)
+        )
+    ).all()
+    if type_key is None:
+        return bool(categories)
+    return any(category.admits_type(type_key) for category in categories)
+
+
 def _validate_team(session: Session, team_id: int, department_id: int) -> Team:
     team = session.get(Team, team_id)
     if team is None:
@@ -277,22 +419,46 @@ def create_ticket(
     priority_key: str = "medium",
     department_id: int,
     project_id: int | None = None,
+    category_id: int | None = None,
+    subcategory_id: int | None = None,
+    provider_id: int | None = None,
+    channel: str | None = None,
     enforce_limits: bool = True,
+    requester_id: int | None = None,
+    parent_ticket_id: int | None = None,
 ) -> Ticket:
     """Crea un ticket en el estado inicial del flujo por defecto y emite ``ticket.created``.
 
     Quien no es agente está limitado por ``REQUESTER_MAX_PRIORITY`` (422) y
-    ``TICKETS_PER_USER_HOUR`` (429); ``enforce_limits=False`` solo para seeds/procesos internos.
+    ``TICKETS_PER_USER_HOUR`` (429); ``enforce_limits=False`` solo para seeds/procesos internos
+    (también admite tipos desactivados, p.ej. datos de demostración históricos).
+    ``requester_id`` (por defecto quien crea) y ``parent_ticket_id`` los usa la orden de trabajo.
     """
     ticket_type = session.scalar(select(TicketType).where(TicketType.key == type_key))
     if ticket_type is None:
         raise _unprocessable(f"Tipo de ticket desconocido: {type_key}")
+    if enforce_limits and not ticket_type.active:
+        raise _unprocessable(f"El tipo de ticket «{ticket_type.name}» no está disponible")
     priority = _priority_by_key(session, priority_key)
     if enforce_limits:
         _check_requester_limits(session, principal, priority)
-    department = session.get(Department, department_id)
-    if department is None:
-        raise _unprocessable("El departamento no existe")
+    department = _validate_service_department(session, department_id)
+    requester = session.get(User, requester_id if requester_id is not None else principal.user_id)
+    if requester is None:  # pragma: no cover - el principal siempre existe
+        raise _unprocessable("El solicitante no existe")
+    if not principal.is_agent:
+        # Canal y proveedor los registra la mesa de ayuda; el portal es el canal del solicitante.
+        channel = DEFAULT_CHANNEL
+        provider_id = None
+    channel = _validate_channel(channel or DEFAULT_CHANNEL)
+    category, subcategory = validate_classification(
+        session,
+        department_id=department.id,
+        type_key=ticket_type.key,
+        category_id=category_id,
+        subcategory_id=subcategory_id,
+    )
+    provider = validate_provider(session, provider_id, department.id) if provider_id is not None else None
     project = None
     if project_id is not None:
         project = session.get(Project, project_id)
@@ -312,7 +478,14 @@ def create_ticket(
         department_id=department.id,
         team_id=team.id if team else None,
         project_id=project.id if project else None,
-        requester_id=principal.user_id,
+        requester_id=requester.id,
+        category_id=category.id if category else None,
+        subcategory_id=subcategory.id if subcategory else None,
+        provider_id=provider.id if provider else None,
+        channel=channel,
+        vip=bool(requester.vip),
+        requester_department_id=requester.department_id,
+        parent_ticket_id=parent_ticket_id,
         created_at=now,
         updated_at=now,
     )
@@ -342,14 +515,15 @@ def update_ticket(
         ticket.priority_id = _priority_by_key(session, changes["priority_key"]).id
 
     department_id = ticket.department_id
+    department_changed = False
     if changes.get("department_id") is not None and changes["department_id"] != ticket.department_id:
-        if session.get(Department, changes["department_id"]) is None:
-            raise _unprocessable("El departamento no existe")
-        department_id = changes["department_id"]
+        department_id = _validate_service_department(session, changes["department_id"]).id
+        department_changed = True
         ticket.department_id = department_id
         if "team_id" not in changes:
             default_team = default_team_for_department(session, department_id)
             ticket.team_id = default_team.id if default_team else None
+    _apply_classification_changes(session, ticket, changes, department_id, department_changed)
     if "team_id" in changes:
         team_id = changes["team_id"]
         ticket.team_id = _validate_team(session, team_id, department_id).id if team_id else None
@@ -380,6 +554,11 @@ def update_ticket(
         principal.user_id,
         {"before": before, "after": after, "changes": diff},
     )
+    if "category_id" in diff or "subcategory_id" in diff:
+        # La categoría/subcategoría condiciona la política SLA (como la prioridad).
+        from app.services.sla.engine import ensure_ticket_sla
+
+        ensure_ticket_sla(session, ticket)
     if ticket.assignee_id != old_assignee:
         emit(
             session,
@@ -394,6 +573,60 @@ def update_ticket(
             },
         )
     return ticket
+
+
+def _apply_classification_changes(
+    session: Session,
+    ticket: Ticket,
+    changes: dict[str, Any],
+    department_id: int,
+    department_changed: bool,
+) -> None:
+    """Categoría, subcategoría, proveedor, canal y solución (PATCH de un agente)."""
+    category_id = changes["category_id"] if "category_id" in changes else ticket.category_id
+    subcategory_id = changes["subcategory_id"] if "subcategory_id" in changes else ticket.subcategory_id
+    explicit = "category_id" in changes or "subcategory_id" in changes
+    if department_changed and "category_id" not in changes and category_id is not None:
+        # La categoría pertenece al departamento anterior: se retira (como el equipo).
+        current = session.get(TicketCategory, category_id)
+        if current is None or current.department_id != department_id:
+            category_id = None
+            if "subcategory_id" not in changes:
+                subcategory_id = None
+    if "category_id" in changes and "subcategory_id" not in changes and subcategory_id is not None:
+        current_sub = session.get(TicketSubcategory, subcategory_id)
+        if category_id is None or current_sub is None or current_sub.category_id != category_id:
+            subcategory_id = None
+    if explicit:
+        type_key = session.scalar(select(TicketType.key).where(TicketType.id == ticket.type_id))
+        category, subcategory = validate_classification(
+            session,
+            department_id=department_id,
+            type_key=type_key,
+            category_id=category_id,
+            subcategory_id=subcategory_id,
+        )
+        category_id = category.id if category else None
+        subcategory_id = subcategory.id if subcategory else None
+    ticket.category_id = category_id
+    ticket.subcategory_id = subcategory_id
+
+    if "provider_id" in changes:
+        provider_id = changes["provider_id"]
+        ticket.provider_id = (
+            validate_provider(session, provider_id, department_id).id if provider_id else None
+        )
+    elif department_changed and ticket.provider_id is not None:
+        provider = session.get(Provider, ticket.provider_id)
+        if provider is None or not provider.applies_to(department_id):
+            ticket.provider_id = None
+    if changes.get("channel") is not None:
+        ticket.channel = _validate_channel(changes["channel"])
+    if "resolution_note" in changes:
+        note = (changes["resolution_note"] or "").strip() or None
+        if note is None and ticket.resolved_at is not None:
+            raise _unprocessable("La solución no puede quedar vacía en un ticket resuelto")
+        ticket.resolution_note = note
 
 
 def find_transition(
@@ -425,13 +658,15 @@ def find_transition(
 def counts_as_first_response(principal: Principal, ticket: Ticket) -> bool:
     """¿La acción de ``principal`` cuenta como primera respuesta (SLA)?
 
-    Solo la de un agente humano distinto del solicitante: las automatizaciones (usuario
-    técnico) no cumplen la primera respuesta aunque comenten o transicionen.
+    Solo la de un agente humano distinto del solicitante que **atiende** el ticket
+    (``can_edit_ticket``): las automatizaciones (usuario técnico) no la cumplen, ni un agente de
+    otra área que solo lo ve (aprobación, visibilidad por gerencia) y comenta en público.
     """
     return (
         principal.is_agent
         and not principal.is_system
         and principal.user_id != ticket.requester_id
+        and can_edit_ticket(principal, ticket)
     )
 
 
@@ -443,24 +678,49 @@ def transition_ticket(
     comment: str | None = None,
     *,
     extra_guard_data: dict[str, Any] | None = None,
+    resolution_note: str | None = None,
 ) -> Ticket:
     """Cambia el estado validando ``workflow_transitions``, permisos y ``run_guards``.
 
     Datos que reciben los guards de ``ticket.transition``: ``transition_id``, ``transition_name``,
     ``requires_approval``, ``from_state``, ``to_state``, ``from_category``, ``to_category``,
     ``comment`` (+ ``extra_guard_data``).
+
+    Al resolver (entrar en categoría ``done`` desde otra) exige solución (``resolution_note``
+    o la ya guardada) y, si quien resuelve atiende el ticket y el departamento tiene
+    categorías activas, la categoría (422). Guarda ``resolved_by_id`` y
+    ``business_resolution_minutes``; reabrir los limpia.
     """
     from_state = session.get(WorkflowState, ticket.status_id)
     if from_state is None:  # pragma: no cover - integridad referencial
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Estado actual inválido")
     to_state, transition = find_transition(session, from_state, to_state_key)
 
-    if not can_edit_ticket(principal, ticket) and not can_requester_transition(
-        principal, ticket, from_state, to_state
-    ):
+    can_edit = can_edit_ticket(principal, ticket)
+    if not can_edit and not can_requester_transition(principal, ticket, from_state, to_state):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail="No tiene permiso para esta transición"
         )
+    resolving = to_state.category == DONE_CATEGORY and from_state.category != DONE_CATEGORY
+    note = (resolution_note or "").strip() or None
+    if resolving:
+        if note is None and not (ticket.resolution_note or "").strip():
+            raise _unprocessable(MSG_RESOLUTION_REQUIRED)
+        if can_edit and ticket.category_id is None:
+            type_key = session.scalar(select(TicketType.key).where(TicketType.id == ticket.type_id))
+            if department_has_categories(session, ticket.department_id, type_key):
+                raise _unprocessable(MSG_CATEGORY_REQUIRED)
+
+    if note is not None and not resolving and not can_edit:
+        # done → done (p.ej. el solicitante cierra su ticket resuelto): la solución oficial es
+        # la de quien lo resolvió; solo quien atiende el ticket puede modificarla.
+        note = None
+    previous_note = ticket.resolution_note
+    note_changed = note is not None and note != previous_note and to_state.category == DONE_CATEGORY
+    if note_changed and resolving:
+        # Se guarda antes de los guards: si la transición queda pendiente de aprobación, la
+        # solicitud se confirma junto con la solución y al aprobarse la transición la encuentra.
+        ticket.resolution_note = note
 
     guard_data: dict[str, Any] = {
         "transition_id": transition.id,
@@ -482,16 +742,29 @@ def transition_ticket(
         "resolved_at": ticket.resolved_at,
         "closed_at": ticket.closed_at,
     }
+    if note_changed:
+        before["resolution_note"] = previous_note
     ticket.status_id = to_state.id
-    if to_state.category == "done":
+    if to_state.category == DONE_CATEGORY:
         if ticket.resolved_at is None:
             ticket.resolved_at = now
         if to_state.is_final:
             ticket.closed_at = now
-    elif from_state.category == "done":
+        if note_changed:
+            ticket.resolution_note = note
+        if resolving:
+            from app.services.sla.engine import business_resolution_minutes
+
+            ticket.resolved_by_id = principal.user_id
+            ticket.business_resolution_minutes = business_resolution_minutes(
+                session, ticket, ticket.resolved_at
+            )
+    elif from_state.category == DONE_CATEGORY:
         # Reapertura: se limpian las marcas de resolución/cierre.
         ticket.resolved_at = None
         ticket.closed_at = None
+        ticket.resolved_by_id = None
+        ticket.business_resolution_minutes = None
     if (
         ticket.first_response_at is None
         and from_state.is_initial
@@ -502,6 +775,13 @@ def transition_ticket(
     session.flush()
     session.expire(ticket)
 
+    after: dict[str, Any] = {
+        "status": to_state.key,
+        "resolved_at": ticket.resolved_at,
+        "closed_at": ticket.closed_at,
+    }
+    if note_changed:
+        after["resolution_note"] = ticket.resolution_note
     emit(
         session,
         EVENT_TRANSITIONED,
@@ -509,11 +789,7 @@ def transition_ticket(
         principal.user_id,
         {
             "before": before,
-            "after": {
-                "status": to_state.key,
-                "resolved_at": ticket.resolved_at,
-                "closed_at": ticket.closed_at,
-            },
+            "after": after,
             "transition_id": transition.id,
             "from_state": from_state.key,
             "to_state": to_state.key,
@@ -524,6 +800,83 @@ def transition_ticket(
     if comment and comment.strip():
         add_comment(session, principal, ticket, comment.strip(), "public")
     return ticket
+
+
+def _resolve_target(session: Session, from_state: WorkflowState) -> WorkflowState | None:
+    """Estado ``done`` alcanzable desde ``from_state`` (prefiere uno no final: «Resuelto»)."""
+    return session.scalars(
+        select(WorkflowState)
+        .join(WorkflowTransition, WorkflowTransition.to_state_id == WorkflowState.id)
+        .where(
+            WorkflowTransition.workflow_id == from_state.workflow_id,
+            WorkflowTransition.from_state_id == from_state.id,
+            WorkflowState.category == DONE_CATEGORY,
+        )
+        .order_by(WorkflowState.is_final, WorkflowState.order, WorkflowState.id)
+    ).first()
+
+
+def create_work_order(
+    session: Session,
+    principal: Principal,
+    parent: Ticket,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    category_id: int | None = None,
+    subcategory_id: int | None = None,
+    resolve_parent: bool = False,
+    resolution_note: str | None = None,
+) -> Ticket:
+    """Traslada un ticket a una orden de trabajo: crea un ticket ``work_order`` hijo (mismo
+    departamento, solicitante y prioridad) y, si ``resolve_parent``, resuelve el original con
+    la solución indicada o «Trasladado a orden de trabajo #<id>». Requiere ``can_edit_ticket``.
+    """
+    if not can_edit_ticket(principal, parent):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="No puede trasladar este ticket a una orden de trabajo"
+        )
+    priority_key = session.scalar(select(Priority.key).where(Priority.id == parent.priority_id))
+    child = create_ticket(
+        session,
+        principal,
+        title=(title or f"Orden de trabajo: {parent.title}")[:200],
+        description=parent.description if description is None else description,
+        type_key=WORK_ORDER_TYPE,
+        priority_key=priority_key or "medium",
+        department_id=parent.department_id,
+        project_id=parent.project_id,
+        category_id=category_id,
+        subcategory_id=subcategory_id,
+        channel=parent.channel or DEFAULT_CHANNEL,
+        requester_id=parent.requester_id,
+        parent_ticket_id=parent.id,
+    )
+    emit(
+        session,
+        EVENT_UPDATED,
+        parent,
+        principal.user_id,
+        {
+            "before": {"work_order_id": None},
+            "after": {"work_order_id": child.id},
+            "changes": {"work_order_id": {"from": None, "to": child.id}},
+        },
+    )
+    if resolve_parent:
+        from_state = session.get(WorkflowState, parent.status_id)
+        if from_state is not None and from_state.category != DONE_CATEGORY:
+            target = _resolve_target(session, from_state)
+            if target is None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail=f"No hay una transición para resolver el ticket desde «{from_state.name}»",
+                )
+            note = (resolution_note or "").strip() or f"Trasladado a orden de trabajo #{child.id}"
+            # SAVEPOINT: si un guard (p.ej. aprobación) bloquea, no confirma nada a medias.
+            with session.begin_nested():
+                transition_ticket(session, principal, parent, target.key, resolution_note=note)
+    return child
 
 
 def add_comment(

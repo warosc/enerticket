@@ -17,7 +17,9 @@ import {
   PriorityBadge,
   StatusBadge,
 } from '@/components/ui';
+import ticketStyles from '@/components/tickets/tickets.module.css';
 import { useAuth } from '@/lib/auth';
+import { categoryAllowsType } from '@/lib/catalog';
 import { CATEGORY_LABELS, formatDateTime, formatRelative } from '@/lib/format';
 import { useApiResource, useCatalog, useDebouncedValue } from '@/lib/hooks';
 import { useTicketEvents } from '@/lib/realtime';
@@ -35,10 +37,15 @@ const CATEGORY_OPTIONS: [string, string][] = [
 
 interface Filters {
   status: string;
+  /** Etapa del flujo (categoría de estado: todo, in_progress...). */
   category: string;
   priority: string;
   department_id: string;
   team_id: string;
+  /** Tipo de ticket (clave). */
+  type_key: string;
+  /** Categoría del catálogo de servicio. */
+  category_id: string;
   scope: Scope;
   q: string;
   sort: TicketSort;
@@ -66,6 +73,8 @@ function parseFilters(params: URLSearchParams): Filters {
     priority: params.get('priority') ?? '',
     department_id: params.get('department_id') ?? '',
     team_id: params.get('team_id') ?? '',
+    type_key: params.get('type_key') ?? '',
+    category_id: /^\d+$/.test(params.get('category_id') ?? '') ? (params.get('category_id') as string) : '',
     scope: scope && SCOPES.includes(scope) ? scope : '',
     q: params.get('q') ?? '',
     sort: sort && SORT_OPTIONS.some((o) => o.value === sort) ? sort : '-created_at',
@@ -96,6 +105,8 @@ function TicketsView() {
       if (next.priority) params.set('priority', next.priority);
       if (next.department_id) params.set('department_id', next.department_id);
       if (next.team_id) params.set('team_id', next.team_id);
+      if (next.type_key) params.set('type_key', next.type_key);
+      if (next.category_id) params.set('category_id', next.category_id);
       if (next.scope) params.set('scope', next.scope);
       if (next.q) params.set('q', next.q);
       if (next.sort !== '-created_at') params.set('sort', next.sort);
@@ -124,6 +135,8 @@ function TicketsView() {
       priority: filters.priority || undefined,
       department_id: filters.department_id || undefined,
       team_id: filters.team_id || undefined,
+      type_key: filters.type_key || undefined,
+      category_id: filters.category_id || undefined,
       mine: filters.scope === 'mine' ? true : undefined,
       assignee_id: filters.scope === 'assigned' && user ? user.id : undefined,
       unassigned: filters.scope === 'unassigned' ? true : undefined,
@@ -167,12 +180,32 @@ function TicketsView() {
   );
   const priorities = useMemo(() => (catalog ? [...catalog.priorities].sort((a, b) => b.rank - a.rank) : []), [catalog]);
 
+  // Categorías del catálogo agrupadas por departamento (filtradas por el departamento y el tipo elegidos).
+  const categoryGroups = useMemo(() => {
+    if (!catalog) return [];
+    const dep = Number(filters.department_id);
+    const names = new Map(catalog.departments.map((d) => [d.id, d.name]));
+    const groups = new Map<number, { id: number; name: string }[]>();
+    for (const c of catalog.categories) {
+      if (dep && c.department_id !== dep) continue;
+      if (filters.type_key && !categoryAllowsType(c, filters.type_key)) continue;
+      const list = groups.get(c.department_id) ?? [];
+      list.push({ id: c.id, name: c.name });
+      groups.set(c.department_id, list);
+    }
+    return Array.from(groups.entries())
+      .map(([id, items]) => ({ id, name: names.get(id) ?? `#${id}`, items }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  }, [catalog, filters.department_id, filters.type_key]);
+
   const activeFilters = [
     filters.status,
     filters.category,
     filters.priority,
     filters.department_id,
     filters.team_id,
+    filters.type_key,
+    filters.category_id,
     filters.scope,
     filters.q,
   ].filter(Boolean).length;
@@ -258,7 +291,7 @@ function TicketsView() {
             </select>
           </label>
           <label className="field">
-            <span className="field-label">Categoría</span>
+            <span className="field-label">Etapa</span>
             <select
               className="select"
               value={filters.category}
@@ -288,11 +321,56 @@ function TicketsView() {
             </select>
           </label>
           <label className="field">
+            <span className="field-label">Tipo</span>
+            <select
+              className="select"
+              value={filters.type_key}
+              onChange={(e) => {
+                const typeKey = e.target.value;
+                const current = catalog?.categories.find((c) => String(c.id) === filters.category_id);
+                const keepCategory = !current || categoryAllowsType(current, typeKey);
+                updateFilters({ type_key: typeKey, ...(keepCategory ? {} : { category_id: '' }) });
+              }}
+            >
+              <option value="">Todos</option>
+              {catalog?.ticket_types.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Categoría</span>
+            <select
+              className="select"
+              value={filters.category_id}
+              onChange={(e) => updateFilters({ category_id: e.target.value })}
+              disabled={categoryGroups.length === 0 && !filters.category_id}
+            >
+              <option value="">{categoryGroups.length === 0 ? 'Sin categorías' : 'Todas'}</option>
+              {categoryGroups.map((group) => (
+                <optgroup key={group.id} label={group.name}>
+                  {group.items.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+          <label className="field">
             <span className="field-label">Departamento</span>
             <select
               className="select"
               value={filters.department_id}
-              onChange={(e) => updateFilters({ department_id: e.target.value, team_id: '' })}
+              onChange={(e) => {
+                const dep = e.target.value;
+                const current = catalog?.categories.find((c) => String(c.id) === filters.category_id);
+                const keepCategory = !current || !dep || String(current.department_id) === dep;
+                updateFilters({ department_id: dep, team_id: '', ...(keepCategory ? {} : { category_id: '' }) });
+              }}
             >
               <option value="">Todos</option>
               {catalog?.departments.map((d) => (
@@ -367,6 +445,7 @@ function TicketsView() {
                     <th scope="col">Estado</th>
                     <th scope="col">Prioridad</th>
                     <th scope="col">SLA</th>
+                    <th scope="col">Tipo / categoría</th>
                     <th scope="col">Departamento / equipo</th>
                     <th scope="col">Asignado</th>
                     <th scope="col">Actualizado</th>
@@ -383,7 +462,15 @@ function TicketsView() {
                           {t.title}
                         </Link>
                         <div className="text-xs subtle">
-                          {t.type.name} · {t.requester.display_name}
+                          {t.requester.display_name}
+                          {t.vip && (
+                            <>
+                              {' '}
+                              <span className={ticketStyles.vip} title="Solicitante VIP">
+                                VIP
+                              </span>
+                            </>
+                          )}
                         </div>
                       </td>
                       <td>
@@ -394,6 +481,16 @@ function TicketsView() {
                       </td>
                       <td>
                         <SlaBadge ticket={t} />
+                      </td>
+                      <td data-label="Tipo / categoría">
+                        <div className="text-sm">{t.type.name}</div>
+                        <div className="text-xs subtle">
+                          {t.category
+                            ? t.subcategory
+                              ? `${t.category.name} › ${t.subcategory.name}`
+                              : t.category.name
+                            : 'Sin clasificar'}
+                        </div>
                       </td>
                       <td data-label="Departamento">
                         <div className="text-sm">{t.department.name}</div>

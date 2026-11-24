@@ -184,6 +184,15 @@ dcp exec api alembic current                 # revisión de esquema aplicada
 dcp down                                     # detener (conserva volúmenes)
 ```
 
+**Reportes programados**: los destinatarios solo pueden ser de los dominios de
+`REPORT_RECIPIENT_DOMAINS` (coma). Si la variable no está en `.env`, compose usa `energuate.com`;
+solo si se define **vacía** (`REPORT_RECIPIENT_DOMAINS=`) se permite cualquier dominio, lo que deja a
+administradores y líderes enviar el Excel con detalle de tickets a correos externos. Un envío que
+falla (SMTP caído, timeout) se reintenta a los 15, 30 y 60 minutos antes de esperar al siguiente
+periodo (estado «Error al enviar (se reintentará)»); si el dueño de la plantilla no inicia sesión en
+`ACCOUNT_STALE_DAYS` días los envíos se suspenden (estado «Dueño sin sesión reciente») hasta que vuelva
+a entrar.
+
 **Nunca** ejecute `dcp down -v` en producción: borra bases de datos, adjuntos y la configuración de
 Keycloak.
 
@@ -197,8 +206,9 @@ Keycloak.
 | Kanban no se actualiza | `dcp logs api` (mensajes de `/ws`); estado de Redis | Revise `REDIS_PASSWORD` y que el proxy no corte `/ws`. |
 | No llegan correos | `dcp logs worker`; tabla `notifications.delivery_status` | Conectividad al relay SMTP (red `egress`), credenciales. |
 | SLA no avanza | `dcp logs beat worker` | `beat` en ejecución (una instancia), cola Redis. |
-| Usuario sin rol/equipo | `get-test-token.sh --claims` | Ver [AD_INTEGRATION.md](AD_INTEGRATION.md#8-solución-de-problemas). |
+| Usuario sin rol/equipo | `get-test-token.sh --claims` | Ver [AD_INTEGRATION.md](AD_INTEGRATION.md#9-solución-de-problemas). |
 | Ningún servicio arranca | `dcp logs preflight` | Corrija las variables indicadas en `.env` (sin `replace-...`, ≥ 16 caracteres). |
 | 429 al crear tickets o subir adjuntos | Mensaje de la API | Límites anti-abuso (`TICKETS_PER_USER_HOUR`, `ATTACHMENT_USER_DAILY_*`); ajústelos en `.env` si el uso es legítimo. |
 | «No ha iniciado sesión en los últimos N días» al asignar | `users.last_login_at` | La persona debe iniciar sesión (sincroniza roles AD) o ajuste `ACCOUNT_STALE_DAYS`. |
+| Reporte programado en «Dueño sin sesión reciente» | `users.last_login_at` del dueño | El dueño debe iniciar sesión (revalida sus roles/equipos) o reasigne la plantilla a otra persona. |
 | WebSocket cerrado con 1013 «Demasiadas conexiones» | Pestañas abiertas del usuario | Cerrar pestañas o subir `WS_MAX_CONNECTIONS_PER_USER`. |

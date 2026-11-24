@@ -51,9 +51,11 @@ def test_inactive_user_is_rejected(client, db, requester):
 def test_catalog(client, requester):
     body = client.get("/catalog", headers=requester.headers).json()
     assert {d["name"] for d in body["departments"]} >= {DEPARTMENT_TELECOM, DEPARTMENT_SOC, "General"}
-    assert len(body["teams"]) == 6
+    # 6 departamentos iniciales + 4 de atención de TI de la Fase 3 (Telecomunicaciones ya existía).
+    assert len(body["teams"]) == 10
     assert [p["key"] for p in body["priorities"]] == ["low", "medium", "high", "critical"]
-    assert {t["key"] for t in body["ticket_types"]} == {"incident", "service_request", "change", "problem"}
+    # Fase 3: «change» y «problem» quedan desactivados y se agrega la orden de trabajo.
+    assert {t["key"] for t in body["ticket_types"]} == {"incident", "service_request", "work_order"}
     states = body["workflow"]["states"]
     assert [s["key"] for s in states] == [
         "new", "triage", "assigned", "in_progress", "pending", "resolved", "closed",
@@ -212,7 +214,7 @@ def test_core_seeds_are_idempotent():
         with SessionLocal() as session:
             seed.run(session)
             session.commit()
-    assert counts() == before == (6, 6, 7, 16)
+    assert counts() == before == (10, 10, 7, 16)
 
 
 def test_demo_seed(monkeypatch, client):
@@ -221,16 +223,22 @@ def test_demo_seed(monkeypatch, client):
     monkeypatch.setattr(settings, "seed_demo", True)
     executed = run_all()
     assert "app.seeds.00_core" in executed and "app.seeds.90_core_demo" in executed
+    from app.models.seed_state import SeedState
+
     with SessionLocal() as session:
+        # 7 tickets de 90_core_demo + los históricos resueltos de 95_catalog_demo.
+        state = session.get(SeedState, "catalog.demo.v1")
+        history = (state.data or {}).get("history_ticket_ids", []) if state is not None else []
+        expected = 7 + len(history)
         total = session.scalar(select(func.count()).select_from(Ticket))
-        assert total == 7
+        assert total == expected
         closed = session.scalar(
             select(func.count()).select_from(Ticket).join(WorkflowState).where(WorkflowState.key == "closed")
         )
         assert closed == 1
     run_all()  # idempotente
     with SessionLocal() as session:
-        assert session.scalar(select(func.count()).select_from(Ticket)) == 7
+        assert session.scalar(select(func.count()).select_from(Ticket)) == expected
     # Los usuarios demo coinciden con los headers dev.
     body = client.get("/tickets", headers=auth_headers("ana.telecom", "agent")).json()
     assert body["total"] >= 2

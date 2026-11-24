@@ -8,6 +8,9 @@
 - requester: ve solo los propios; comenta y puede cerrar/reabrir los suyos.
 - Otros módulos amplían la visibilidad con ``register_visibility_extension``
   (p.ej. flows: aprobadores ven tickets con aprobaciones dirigidas a ellos).
+- Gerencias (Fase 3): quien tiene ``viewer_gerencia_ids`` (grupo AD de la gerencia o
+  asignación manual) ve en SOLO LECTURA los tickets cuyo departamento solicitante
+  (``requester_department_id``) pertenece a esas gerencias. ``can_edit_ticket`` no cambia.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from sqlalchemy import ColumnElement, and_, false, or_, select, true
 from sqlalchemy.orm import Session
 
 from app.core.security import Principal
-from app.models.core import Ticket, WorkflowState
+from app.models.core import Department, Ticket, WorkflowState
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,18 @@ def register_visibility_extension(fn: VisibilityExtension) -> VisibilityExtensio
 def unregister_visibility_extension(fn: VisibilityExtension) -> None:
     if fn in _visibility_extensions:
         _visibility_extensions.remove(fn)
+
+
+def gerencia_visibility(principal: Principal) -> "ColumnElement[bool] | None":
+    """Tickets solicitados por departamentos de las gerencias que el usuario puede ver."""
+    if not principal.viewer_gerencia_ids:
+        return None
+    return Ticket.requester_department_id.in_(
+        select(Department.id).where(Department.gerencia_id.in_(sorted(principal.viewer_gerencia_ids)))
+    )
+
+
+register_visibility_extension(gerencia_visibility)
 
 
 def _extension_clauses(principal: Principal) -> list[ColumnElement[bool]]:

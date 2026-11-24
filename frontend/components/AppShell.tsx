@@ -32,7 +32,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/approvals', label: 'Aprobaciones', icon: 'approvals', roles: ['approver', 'agent', 'admin'] },
   { href: '/sla', label: 'SLA', icon: 'sla', roles: ['agent', 'admin'] },
   { href: '/automations', label: 'Automatizaciones', icon: 'automations', roles: ['admin'] },
-  { href: '/reports', label: 'Reportes', icon: 'reports', roles: ['agent', 'admin'] },
+  { href: '/reports', label: 'Reportes', icon: 'reports', roles: [] },
   { href: '/admin', label: 'Administración', icon: 'admin', roles: ['admin'] },
 ];
 
@@ -177,6 +177,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <span className="app-user-roles truncate" style={{ display: 'block' }}>
                 {roleText}
               </span>
+              {(user.department || user.vip) && (
+                <span
+                  className="app-user-roles truncate"
+                  style={{ display: 'block' }}
+                  title={[user.department?.name, user.gerencia?.name].filter(Boolean).join(' · ')}
+                >
+                  {user.vip ? 'VIP' : ''}
+                  {user.vip && user.department ? ' · ' : ''}
+                  {user.department?.name ?? ''}
+                </span>
+              )}
             </span>
           </div>
           <button type="button" className="btn btn-sm btn-logout" onClick={() => {

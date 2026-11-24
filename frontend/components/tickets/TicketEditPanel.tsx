@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Alert } from '@/components/ui';
 import { apiFetch, errorMessage } from '@/lib/api';
+import { ticketDepartments } from '@/lib/catalog';
 import type { Catalog, Me, TicketOut, TicketUpdate, UserOut } from '@/lib/types';
 
 /** Edición de prioridad, departamento, equipo y asignado (agentes y administradores). */
@@ -38,6 +39,8 @@ export default function TicketEditPanel({
   }, [ticket.priority.key, ticket.department.id, ticket.team?.id, ticket.assignee?.id]);
 
   const teams = useMemo(() => catalog.teams.filter((t) => t.department_id === departmentId), [catalog.teams, departmentId]);
+  // Solo departamentos de atención activos (la API rechaza los demás); se conserva el actual.
+  const departments = useMemo(() => ticketDepartments(catalog, ticket.department.id), [catalog, ticket.department.id]);
   const priorities = useMemo(() => [...catalog.priorities].sort((a, b) => a.rank - b.rank), [catalog.priorities]);
   const assigneeOptions = useMemo(() => {
     const list = [...agents];
@@ -126,12 +129,17 @@ export default function TicketEditPanel({
             setTeamId(firstTeam ? firstTeam.id : '');
           }}
         >
-          {catalog.departments.map((d) => (
+          {departments.map((d) => (
             <option key={d.id} value={d.id}>
               {d.name}
             </option>
           ))}
         </select>
+        {departmentId !== ticket.department.id && (ticket.category || ticket.provider) && (
+          <span className="field-hint">
+            Al cambiar de departamento se retiran la categoría y el proveedor que no le correspondan.
+          </span>
+        )}
       </label>
       <label className="field">
         <span className="field-label">Equipo</span>

@@ -2,9 +2,10 @@
  * Reglas de permisos de tickets del lado del cliente. Replican backend/app/core/permissions.py solo
  * para decidir qué acciones mostrar; la API siempre vuelve a validarlas (nunca se confía en el frontend).
  */
-import type { Me, TicketOut, Workflow, WorkflowTransition } from './types';
+import type { Catalog, Me, TicketOut, Workflow, WorkflowTransition } from './types';
 
 type TicketScope = Pick<TicketOut, 'assignee' | 'team' | 'department' | 'requester'>;
+type MeScope = Pick<Me, 'id' | 'roles' | 'teams' | 'department_ids'>;
 
 /** ¿Puede editar/transicionar libremente? admin todo; agent los de su área o asignados a él. */
 export function canEditTicket(me: Pick<Me, 'id' | 'roles' | 'teams' | 'department_ids'>, ticket: TicketScope): boolean {
@@ -42,4 +43,52 @@ export function transitionsFor(
       return closing || reopening;
     })
     .sort((a, b) => (states.get(a.to_state_id)?.order ?? 0) - (states.get(b.to_state_id)?.order ?? 0));
+}
+
+/**
+ * ¿La transición resuelve el ticket? (entra en un estado «done» desde uno que no lo es).
+ * Al resolver la API exige la solución (`resolution_note`) y, a quien atiende, la categoría.
+ */
+export function isResolvingTransition(
+  workflow: Workflow,
+  ticket: Pick<TicketOut, 'status'>,
+  transition: Pick<WorkflowTransition, 'to_state_id'>,
+): boolean {
+  const target = workflow.states.find((s) => s.id === transition.to_state_id);
+  const from = workflow.states.find((s) => s.id === ticket.status.id);
+  return target?.category === 'done' && (from?.category ?? ticket.status.category) !== 'done';
+}
+
+/**
+ * ¿Hay que clasificar (categoría) antes de resolver? Solo para quien puede editar el ticket y si el
+ * departamento tiene categorías activas **que admiten el tipo del ticket** (como la API: si ninguna lo
+ * admite no se puede clasificar). El solicitante que cierra su ticket solo indica la solución.
+ */
+export function needsCategoryToResolve(
+  me: MeScope,
+  ticket: TicketScope & Pick<TicketOut, 'category' | 'type'>,
+  catalog: Pick<Catalog, 'categories'> | null,
+): boolean {
+  if (ticket.category || !catalog) return false;
+  if (!canEditTicket(me, ticket)) return false;
+  const typeKey = ticket.type?.key;
+  return catalog.categories.some(
+    (c) =>
+      c.department_id === ticket.department.id &&
+      (!typeKey || c.type_keys.length === 0 || c.type_keys.includes(typeKey)),
+  );
+}
+
+/**
+ * ¿Puede trasladar el ticket a una orden de trabajo? Requiere poder editarlo (como la API), que el tipo
+ * «Orden de trabajo» esté activo y que el ticket no sea ya una orden de trabajo.
+ */
+export function canCreateWorkOrder(
+  me: MeScope,
+  ticket: TicketScope & Pick<TicketOut, 'type'>,
+  catalog: Pick<Catalog, 'ticket_types'> | null,
+): boolean {
+  if (!catalog || ticket.type.key === 'work_order') return false;
+  if (!catalog.ticket_types.some((t) => t.key === 'work_order')) return false;
+  return canEditTicket(me, ticket);
 }

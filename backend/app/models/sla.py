@@ -2,7 +2,8 @@
 
 - ``business_calendars``: zona horaria y ventanas de servicio por día de la semana.
 - ``calendar_holidays``: feriados de cada calendario (fecha fija o recurrente cada año).
-- ``sla_policies``: condiciones de aplicación (prioridad/tipo/departamento) con precedencia,
+- ``sla_policies``: condiciones de aplicación (prioridad/tipo/departamento/categoría/
+  subcategoría/VIP) con precedencia,
   objetivos de primera respuesta y resolución en minutos hábiles, umbral de advertencia y
   estados/categorías que pausan el reloj.
 - ``sla_instances``: reloj de una métrica (first_response | resolution) para un ticket.
@@ -92,6 +93,10 @@ class SlaPolicy(Base):
     priority_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
     type_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
     department_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    # Catálogo de servicio (0006_catalog): categorías/subcategorías del ticket y solo VIP.
+    category_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    subcategory_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    vip_only: Mapped[bool] = mapped_column(Boolean, default=False)
     # Menor valor = se evalúa antes. Gana la primera política activa que cumpla las condiciones.
     precedence: Mapped[int] = mapped_column(Integer, default=100)
     # Objetivos en minutos hábiles del calendario (None = sin objetivo para esa métrica).

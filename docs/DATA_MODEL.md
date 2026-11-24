@@ -14,9 +14,13 @@ interpreta en `TZ_BUSINESS=America/Guatemala`.
 | `0003_flows` | `0002_sla` | flows | `approval_policies`, `approval_requests`, `approval_steps`, `approval_decisions`, `automation_rules`, `automation_executions`, `notifications` |
 | `0004_attachments` | `0003_flows` | attachments | `ticket_attachments` |
 | `0005_seed_state` | `0004_attachments` | core | `seed_state` |
+| `0006_catalog` | `0005_seed_state` | catálogo (Fase 3) | `gerencias`, `department_aliases`, `ticket_categories`, `ticket_subcategories`, `providers`, `gerencia_viewers` + columnas nuevas en `departments`, `users`, `ticket_types`, `tickets` y `sla_policies` |
+| `0007_report_templates` | `0006_catalog` | reportes (Fase 3) | `report_templates` |
+| `0008_phase3_fixes` | `0007_report_templates` | correcciones (Fase 3) | columnas `users.ad_department_value` y `report_templates.retry_count` |
 
 El contenedor `api` ejecuta `alembic upgrade head` y los seeds idempotentes (`python -m app.seeds`,
-orden alfabético: `00_core`, `10_sla`, `20_flows`, `90_core_demo`) en cada arranque. Los datos
+orden alfabético: `00_core`, `10_sla`, `20_flows`, `40_report_templates`, `90_core_demo`,
+`95_catalog_demo`) en cada arranque. Los datos
 iniciales editables (departamentos y equipos, calendarios y políticas SLA, ejemplos de flujos) se
 crean una sola vez: la marca queda en `seed_state` (`key` PK, `applied_at`, `data` JSON con, p. ej.,
 el id del calendario cuyos feriados se mantienen) y los arranques siguientes no los recrean aunque el
@@ -60,14 +64,22 @@ erDiagram
 | `display_name` | varchar(200) | `name` del token |
 | `email` | varchar(255) nulo | |
 | `roles` | JSON (lista) | Roles de realm del último login; permite `GET /users?role=` |
+| `department_id` | FK `departments` nulo, índice | Departamento del usuario según el atributo `department` del AD (resuelto con `department_aliases`); el administrador puede fijarlo a mano y el siguiente login con claim `department` lo vuelve a resolver |
+| `vip` | bool (false) | Miembro del grupo `VIP_GROUP` (se actualiza en cada login si el token trae `groups`) |
+| `ad_department_value` | varchar(200) nulo, índice | Último valor normalizado del claim `department`. Si cambia a un valor pendiente se retira `department_id`; si no cambia se respeta el ajuste manual. Al asignar un alias se actualizan al instante los usuarios con ese valor (`0008_phase3_fixes`) |
 | `active` | bool | |
 | `created_at`, `last_login_at` | timestamptz | |
 
 Provisión JIT: la API hace *upsert* por `keycloak_sub` en cada petición autenticada.
 
 ### `departments`
-`id`, `name` (único), `parent_id` → `departments.id` (SET NULL). Seeds: Telecomunicaciones, Seguridad
-de Redes, Ciberseguridad / SOC, Riesgo y Cumplimiento, Proyectos TI, General.
+`id`, `name` (único), `parent_id` → `departments.id` (SET NULL), `gerencia_id` → `gerencias` (nulo, SET
+NULL, índice), `serves_tickets` (bool: `true` = departamento **de atención**, recibe tickets; `false` = solo
+departamento **solicitante**, p. ej. Comercial), `active` (bool). La migración `0006` deja
+`serves_tickets=true` en los departamentos existentes. Seeds: Telecomunicaciones, Seguridad de Redes,
+Ciberseguridad / SOC, Riesgo y Cumplimiento, Proyectos TI, General (`core.departments.v1`) y, en la
+Fase 3, Sistemas Comerciales, Sistemas Corporativos, Telecomunicaciones, Seguridad Informática y Soporte
+Técnico, cada uno con su «Equipo <nombre>» (`core.departments.v2`, una sola vez).
 
 ### `teams`
 `id`, `department_id` → `departments`, `name` (único por departamento), `external_group` (nombre del
@@ -81,7 +93,10 @@ el usuario. Se sincroniza con el claim `groups` para los equipos con `external_g
 `id`, `code` (único), `name`, `owner_id` → `users` (nulo), `team_id` → `teams` (nulo).
 
 ### `ticket_types`, `priorities`
-- `ticket_types`: `id`, `key` (único), `name`. Seeds: `incident`, `service_request`, `change`, `problem`.
+- `ticket_types`: `id`, `key` (único), `name`, `active`. Seeds: `incident`, `service_request`, `change`,
+  `problem`; en la Fase 3 (`core.ticket_types.v2`, una vez) `incident` → «Incidencia», `service_request` →
+  «Petición», nuevo `work_order` → «Orden de trabajo», y `change`/`problem` quedan inactivos (no se borran;
+  los tickets antiguos los conservan, pero no se pueden crear tickets nuevos de un tipo inactivo).
 - `priorities`: `id`, `key` (único), `name`, `rank`. Seeds: `low`=1, `medium`=2, `high`=3, `critical`=4.
 
 ### `workflow_definitions`, `workflow_states`, `workflow_transitions`
@@ -105,6 +120,15 @@ Workflow por defecto: `new` → `triage` → `assigned` → `in_progress` ⇄ `p
 | `created_at` (índice), `updated_at` | timestamptz | |
 | `first_response_at` | timestamptz | Primer comentario público de un agente distinto del solicitante o primera transición fuera de `new` por un agente |
 | `resolved_at`, `closed_at` | timestamptz | |
+| `category_id`, `subcategory_id` | FK `ticket_categories` / `ticket_subcategories` nulos, índice | Clasificación del departamento de atención (Fase 3) |
+| `provider_id` | FK `providers` nulo, índice | Proveedor externo que atendió (lo fija un agente) |
+| `channel` | varchar(20), CHECK `portal`, `email`, `phone`, `other` | Canal de entrada; el del solicitante siempre es `portal` |
+| `vip` | bool | Copia de `users.vip` del solicitante al crear el ticket |
+| `resolution_note` | text nulo | Solución; obligatoria para resolver |
+| `resolved_by_id` | FK `users` nulo | Quién lo resolvió (se limpia al reabrir) |
+| `requester_department_id` | FK `departments` nulo, índice | Departamento del solicitante al crear el ticket (de él sale la gerencia solicitante) |
+| `parent_ticket_id` | FK `tickets` nulo, índice | Ticket original de una orden de trabajo |
+| `business_resolution_minutes` | int nulo | Minutos **hábiles** de resolución: los de la instancia SLA de resolución (descuenta pausas) o, sin SLA, los del calendario hábil por defecto entre `created_at` y `resolved_at`. Base de las métricas de horas de los reportes |
 
 ### `ticket_comments`
 `id`, `ticket_id` (CASCADE, índice), `author_id`, `body`, `visibility` ∈ {`public`, `internal`}
@@ -131,7 +155,7 @@ erDiagram
 |---|---|
 | `business_calendars` | `id`, `name` (único), `description`, `timezone` (America/Guatemala), `windows` JSON `[{weekday 0-6 (0=lunes), start "HH:MM", end "HH:MM"}]`, `created_at`, `updated_at` |
 | `calendar_holidays` | `id`, `calendar_id` (CASCADE), `date`, `name`, `recurring` (se repite cada año); único (`calendar_id`, `date`) |
-| `sla_policies` | `id`, `name` (único), `calendar_id`, filtros JSON `priority_keys`, `type_keys`, `department_ids` (vacío = todos), `precedence`, `first_response_minutes`, `resolution_minutes` (minutos hábiles), `warning_threshold_pct`, `pause_categories`, `pause_states` (JSON), `active` |
+| `sla_policies` | `id`, `name` (único), `calendar_id`, filtros JSON `priority_keys`, `type_keys`, `department_ids`, `category_ids`, `subcategory_ids` (vacío = todos) y `vip_only` (bool), `precedence` (se evalúa primero la más específica: subcategoría > categoría > resto; dentro del mismo nivel, menor precedencia = antes), `first_response_minutes`, `resolution_minutes` (minutos hábiles), `warning_threshold_pct`, `pause_categories`, `pause_states` (JSON), `active` |
 | `sla_instances` | `id`, `ticket_id` (CASCADE), `policy_id`, `calendar_id`, `metric` ∈ {`first_response`, `resolution`}, `target_minutes`, `warning_threshold_pct`, `started_at`, `target_at`, `warning_at`, `paused_at`, `paused_business_seconds`, `stopped_at`, `breached_at`, `warned_at`, `status` ∈ {`running`, `paused`, `met`, `breached`, `cancelled`}. Índices (`ticket_id`, `metric`), (`status`, `target_at`), (`status`, `warning_at`) |
 | `sla_events` | `id`, `instance_id` (CASCADE), `type` (`started`, `paused`, `resumed`, `warning`, `breached`, `met`, `stopped`, `cancelled`, `recalculation`…), `at`, `data` JSON |
 
@@ -184,6 +208,54 @@ reintentan cada 5 min (`notifications.retry_pending`).
 El contenido vive en MinIO/S3; la API sube y sirve los archivos (proxy en *streaming*) tras verificar
 la visibilidad del ticket, de modo que el bucket nunca se expone al navegador.
 
+## Catálogo de servicio (`0006_catalog`)
+
+```mermaid
+erDiagram
+    gerencias ||--o{ departments : "gerencia_id"
+    gerencias ||--o{ gerencia_viewers : ""
+    users ||--o{ gerencia_viewers : ""
+    departments ||--o{ department_aliases : "department_id"
+    departments ||--o{ ticket_categories : ""
+    ticket_categories ||--o{ ticket_subcategories : ""
+    departments ||--o{ users : "department_id"
+    tickets }o--o| ticket_categories : "category_id"
+    tickets }o--o| ticket_subcategories : "subcategory_id"
+    tickets }o--o| providers : "provider_id"
+    tickets }o--o| departments : "requester_department_id"
+    tickets }o--o| tickets : "parent_ticket_id"
+```
+
+| Tabla | Columnas principales |
+|---|---|
+| `gerencias` | `id`, `name` (único, 150), `external_group` (grupo AD cuyos miembros ven **en solo lectura** los tickets **solicitados** por los departamentos de la gerencia), `active` |
+| `department_aliases` | `id`, `normalized_value` (único, 200), `raw_value`, `department_id` (nulo = **pendiente** de asignar por el administrador), `created_at`. Traduce el atributo `department` del AD a un departamento |
+| `ticket_categories` | `id`, `department_id` (índice), `name`, `type_keys` JSON (tipos admitidos; vacío = todos), `active`, `sort_order`. Único (`department_id`, `name`) |
+| `ticket_subcategories` | `id`, `category_id` (CASCADE, índice), `name`, `active`, `sort_order`. Único (`category_id`, `name`) |
+| `providers` | `id`, `name` (único), `department_ids` JSON (departamentos de atención donde aplica; vacío = todos), `active` |
+| `gerencia_viewers` | PK (`gerencia_id`, `user_id`): asignación manual de visores de una gerencia (además del grupo AD) |
+
+Normalización del valor del AD (`app/core/catalog.py::normalize_ad_value`): sin espacios sobrantes,
+mayúsculas, sin tildes y sin prefijo numérico (`"07 Comercial"` → `COMERCIAL`). Un valor nuevo crea el
+alias: si coincide exactamente con el nombre normalizado de un departamento queda asignado; si no, queda
+pendiente (evento `catalog.alias_pending`, visible para administradores en **Administración → Valores del
+AD**).
+
+Reglas de clasificación: la categoría debe estar activa, pertenecer al departamento del ticket y admitir su
+tipo; la subcategoría debe ser de la categoría; el proveedor, activo y aplicable al departamento. Para
+resolver un ticket hace falta la solución (`resolution_note`) y, si el departamento tiene categorías
+activas y quien resuelve atiende el ticket, la categoría. «Trasladar a orden de trabajo» crea un ticket
+`work_order` hijo (`parent_ticket_id`) y, opcionalmente, resuelve el original.
+
+## Reportes (`0007_report_templates`)
+
+| Tabla | Columnas principales |
+|---|---|
+| `report_templates` | `id`, `name`, `description`, `owner_id` (nulo = de fábrica), `is_system`, `definition` JSON (definición del generador: periodo, filtros, secciones), `shared_roles` JSON, `shared_department_ids` JSON, `schedule` JSON (`enabled`, `frequency` mensual o semanal, `day`, `hour`, `recipients`), `next_run_at` (índice), `last_run_at`, `last_status` (`sent`, `smtp_disabled`, `owner_inactive`, `owner_stale`, `not_allowed`, `no_recipients`, `invalid_definition`, `retrying`, `error`), `retry_count` (reintentos tras error, `0008_phase3_fixes`), `created_at`, `updated_at` |
+
+Los reportes no guardan datos calculados: cada ejecución consulta los tickets visibles para quien la
+ejecuta (o, en un envío programado, para el dueño de la plantilla). Ver [REPORTS.md](REPORTS.md).
+
 ## Tablas heredadas
 
 `legacy_tickets`, `legacy_comments`, `legacy_audit_events`: datos de la Fase 1 (MVP) renombrados por
@@ -198,6 +270,6 @@ actualizarse. No se accede a ella desde la aplicación; se respalda junto con la
 
 ## Evolución prevista
 
-- `assets`, `asset_ticket_links` (CMDB) en una migración `0005_*` futura.
+- `assets`, `asset_ticket_links` (CMDB) en una migración futura (`0008_*` o posterior).
 - Nuevas migraciones: siempre encadenadas al `head` vigente, con `upgrade` y `downgrade`, y
   probadas en CI (`alembic upgrade head` → `downgrade base` → `upgrade head`).

@@ -36,6 +36,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.db import utcnow
 from app.core.events import emit
 from app.models.core import Priority, Ticket, TicketType, WorkflowState
@@ -47,9 +48,11 @@ from app.models.sla import (
     SlaPolicy,
 )
 from app.services.sla.calendar import (
+    DEFAULT_BUSINESS_CALENDAR_NAME,
     CalendarSpec,
     add_business_seconds,
     business_seconds_between,
+    standard_business_spec,
 )
 
 logger = logging.getLogger(__name__)
@@ -122,31 +125,74 @@ def policy_minutes(policy: SlaPolicy, metric: str) -> int | None:
 
 
 def policy_matches(
-    policy: SlaPolicy, *, priority_key: str | None, type_key: str | None, department_id: int | None
+    policy: SlaPolicy,
+    *,
+    priority_key: str | None,
+    type_key: str | None,
+    department_id: int | None,
+    category_id: int | None = None,
+    subcategory_id: int | None = None,
+    vip: bool = False,
 ) -> bool:
-    """Todas las condiciones no vacías deben cumplirse (lista vacía = cualquiera)."""
+    """Todas las condiciones no vacías deben cumplirse (lista vacía = cualquiera).
+
+    ``vip_only`` exige un ticket VIP (solicitante VIP al crearlo).
+    """
     if policy.priority_keys and priority_key not in policy.priority_keys:
         return False
     if policy.type_keys and type_key not in policy.type_keys:
         return False
     if policy.department_ids and department_id not in policy.department_ids:
         return False
+    if policy.category_ids and category_id not in policy.category_ids:
+        return False
+    if policy.subcategory_ids and subcategory_id not in policy.subcategory_ids:
+        return False
+    if policy.vip_only and not vip:
+        return False
     return True
 
 
+def policy_specificity(policy: SlaPolicy) -> int:
+    """0 = por subcategoría, 1 = por categoría, 2 = resto (menor = más específica)."""
+    if policy.subcategory_ids:
+        return 0
+    if policy.category_ids:
+        return 1
+    return 2
+
+
+def policy_sort_key(policy: SlaPolicy) -> tuple[int, int, int]:
+    """Orden de evaluación: primero la más específica (subcategoría > categoría > resto), luego
+    ``precedence`` dentro del mismo nivel, luego ``id``.
+
+    Los SLA del negocio se definen por departamento + categoría/subcategoría: una ANS de catálogo
+    siempre gana a una política general (p. ej. por prioridad), sin depender del número de precedencia.
+    """
+    return (policy_specificity(policy), int(policy.precedence or 0), int(policy.id or 0))
+
+
 def select_policy(session: Session, ticket: Ticket) -> SlaPolicy | None:
-    """Primera política activa (por ``precedence`` y luego ``id``) cuyas condiciones cumple el ticket."""
+    """Primera política activa cuyas condiciones cumple el ticket.
+
+    Orden: la más específica (subcategoría > categoría > resto); dentro del mismo nivel,
+    ``precedence``; luego ``id``.
+    """
     priority = session.get(Priority, ticket.priority_id)
     ticket_type = session.get(TicketType, ticket.type_id)
-    policies = session.scalars(
-        select(SlaPolicy).where(SlaPolicy.active.is_(True)).order_by(SlaPolicy.precedence, SlaPolicy.id)
-    ).all()
+    policies = sorted(
+        session.scalars(select(SlaPolicy).where(SlaPolicy.active.is_(True))).all(),
+        key=policy_sort_key,
+    )
     for policy in policies:
         if policy_matches(
             policy,
             priority_key=priority.key if priority else None,
             type_key=ticket_type.key if ticket_type else None,
             department_id=ticket.department_id,
+            category_id=ticket.category_id,
+            subcategory_id=ticket.subcategory_id,
+            vip=bool(ticket.vip),
         ):
             return policy
     return None
@@ -649,6 +695,56 @@ def ensure_ticket_sla(session: Session, ticket: Ticket, at: datetime | None = No
         changed=first.changed + second.changed,
         breached=first.breached + second.breached,
     )
+
+
+def default_calendar(session: Session) -> BusinessCalendar | None:
+    """Calendario hábil por defecto: el sembrado por ``10_sla`` (por id) o el de nombre conocido."""
+    from app.core.seed_state import get_seed_state
+
+    state = get_seed_state(session, "sla.defaults.v1")
+    ids = (state.data or {}).get("holiday_calendar_ids") if state is not None else None
+    if isinstance(ids, list):
+        for calendar_id in ids:
+            if isinstance(calendar_id, int):
+                calendar = session.get(BusinessCalendar, calendar_id)
+                if calendar is not None and calendar.windows:
+                    return calendar
+    return session.scalar(
+        select(BusinessCalendar).where(BusinessCalendar.name == DEFAULT_BUSINESS_CALENDAR_NAME)
+    )
+
+
+def default_business_spec(session: Session, start: datetime, end: datetime) -> CalendarSpec:
+    """``CalendarSpec`` del calendario hábil por defecto; si no existe, el horario estándar
+    (lunes a viernes 08:00-17:00 en ``TZ_BUSINESS`` con feriados oficiales)."""
+    calendar = default_calendar(session)
+    if calendar is not None:
+        try:
+            return SpecCache(session).get(calendar.id)
+        except (LookupError, ValueError):
+            logger.warning("Calendario por defecto %s inválido; se usa el horario estándar", calendar.id)
+    years = range(start.year - 1, end.year + 2)
+    return standard_business_spec(settings.tz_business or "America/Guatemala", years)
+
+
+def business_resolution_minutes(session: Session, ticket: Ticket, resolved_at: datetime) -> int:
+    """Minutos hábiles de resolución de un ticket resuelto en ``resolved_at``.
+
+    Si el ticket tiene instancia SLA de resolución vigente se usan sus segundos hábiles
+    consumidos (ya descuentan pausas y el tiempo que estuvo resuelto antes de reabrirse);
+    si no, los minutos hábiles entre ``created_at`` y ``resolved_at`` con el calendario por
+    defecto.
+    """
+    instance = current_instances(session, ticket.id).get(METRIC_RESOLUTION)
+    if instance is not None:
+        try:
+            spec = SpecCache(session).get(instance.calendar_id)
+            return max(0, elapsed_business_seconds(spec, instance, resolved_at)) // 60
+        except (LookupError, ValueError):
+            logger.warning("No se pudo usar la instancia SLA %s para el tiempo hábil", instance.id)
+    start = ticket.created_at
+    spec = default_business_spec(session, start, resolved_at)
+    return business_seconds_between(spec, start, resolved_at) // 60
 
 
 def refresh_calendar_targets(session: Session, calendar_id: int) -> int:

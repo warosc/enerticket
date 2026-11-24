@@ -7,17 +7,30 @@ import ApprovalsPanel from '@/components/ticket/ApprovalsPanel';
 import AttachmentsPanel from '@/components/ticket/AttachmentsPanel';
 import SlaBadge from '@/components/ticket/SlaBadge';
 import SlaPanel from '@/components/ticket/SlaPanel';
+import ClassificationPanel from '@/components/tickets/ClassificationPanel';
+import RelatedTicketsPanel from '@/components/tickets/RelatedTicketsPanel';
+import ResolutionPanel from '@/components/tickets/ResolutionPanel';
+import ResolveDialog, { type ResolveFailure } from '@/components/tickets/ResolveDialog';
 import TicketComments from '@/components/tickets/TicketComments';
 import TicketContentEditor from '@/components/tickets/TicketContentEditor';
 import TicketEditPanel from '@/components/tickets/TicketEditPanel';
 import TicketHistory from '@/components/tickets/TicketHistory';
+import WorkOrderDialog from '@/components/tickets/WorkOrderDialog';
+import ticketStyles from '@/components/tickets/tickets.module.css';
 import { Alert, EmptyState, ErrorAlert, Loading, PageHeader, PriorityBadge, StatusBadge } from '@/components/ui';
 import { ApiError, apiFetch, errorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { channelLabel, formatBusinessMinutes } from '@/lib/catalog';
 import { formatDateTime } from '@/lib/format';
 import { useCatalog } from '@/lib/hooks';
 import { useTicketEvents, type TicketEvent } from '@/lib/realtime';
-import { canEditTicket, transitionsFor } from '@/lib/ticketRules';
+import {
+  canCreateWorkOrder,
+  canEditTicket,
+  isResolvingTransition,
+  needsCategoryToResolve,
+  transitionsFor,
+} from '@/lib/ticketRules';
 import type {
   TicketComment,
   TicketHistoryEntry,
@@ -55,6 +68,10 @@ export default function TicketDetailPage() {
   // Transición a un estado final (cerrar, rechazar) pendiente de confirmación.
   const [confirmTransition, setConfirmTransition] = useState<WorkflowTransition | null>(null);
   const confirmButton = useRef<HTMLButtonElement | null>(null);
+  // Transición que resuelve el ticket: abre el diálogo que pide la solución (y la categoría).
+  const [resolveTransition, setResolveTransition] = useState<WorkflowTransition | null>(null);
+  const [showWorkOrder, setShowWorkOrder] = useState(false);
+  const [createdWorkOrder, setCreatedWorkOrder] = useState<TicketOut | null>(null);
   const [editingContent, setEditingContent] = useState(false);
 
   const requestId = useRef(0);
@@ -133,7 +150,13 @@ export default function TicketDetailPage() {
   const currentStatusId = ticket?.status.id;
   useEffect(() => {
     setConfirmTransition(null);
+    setResolveTransition(null);
   }, [currentStatusId]);
+  // Al navegar a otro ticket (p.ej. a la orden de trabajo creada) se limpian los avisos.
+  useEffect(() => {
+    setCreatedWorkOrder(null);
+    setShowWorkOrder(false);
+  }, [ticketId]);
   useEffect(() => {
     if (confirmTransition) confirmButton.current?.focus();
   }, [confirmTransition]);
@@ -159,8 +182,19 @@ export default function TicketDetailPage() {
   const stateName = (id: number) => catalog?.workflow.states.find((s) => s.id === id)?.name ?? '';
   const isFinalTarget = (transition: WorkflowTransition) =>
     Boolean(catalog?.workflow.states.find((s) => s.id === transition.to_state_id)?.is_final);
+  const isResolving = (transition: WorkflowTransition) =>
+    Boolean(catalog && ticket && isResolvingTransition(catalog.workflow, ticket, transition));
+  const needsCategory = Boolean(user && ticket && needsCategoryToResolve(user, ticket, catalog));
+  const showWorkOrderAction = Boolean(user && ticket && canCreateWorkOrder(user, ticket, catalog));
 
   function requestTransition(transition: WorkflowTransition) {
+    // Resolver (entrar en un estado «done») abre el diálogo de solución, que sirve de confirmación.
+    if (isResolving(transition)) {
+      setTransitionError(null);
+      setConfirmTransition(null);
+      setResolveTransition(transition);
+      return;
+    }
     // Las transiciones a estados finales (cerrar, rechazar) piden confirmación a todos los roles.
     if (isFinalTarget(transition)) {
       setTransitionError(null);
@@ -183,22 +217,32 @@ export default function TicketDetailPage() {
       setTransitionComment('');
       void load(true);
     } catch (e) {
-      const failure: TransitionFailure = {
-        message: errorMessage(e),
-        code: e instanceof ApiError ? e.code : null,
-        status: e instanceof ApiError ? e.status : 0,
-        transitionName: transition.name || stateName(transition.to_state_id),
-        approvalRequestId: null,
-      };
-      const requestId = e instanceof ApiError ? e.detailObject?.approval_request_id : undefined;
-      if (typeof requestId === 'number') failure.approvalRequestId = requestId;
-      setTransitionError(failure);
-      // Un 409 suele indicar que el ticket cambió (otro usuario, un guard que creó una aprobación...):
-      // se recarga para mostrar el estado y las aprobaciones vigentes.
-      if (failure.status === 409) void load(true);
+      handleTransitionError(e, transition);
     } finally {
       setTransitioning(null);
     }
+  }
+
+  function handleTransitionError(e: unknown, transition: WorkflowTransition) {
+    const failure: TransitionFailure = {
+      message: errorMessage(e),
+      code: e instanceof ApiError ? e.code : null,
+      status: e instanceof ApiError ? e.status : 0,
+      transitionName: transition.name || stateName(transition.to_state_id),
+      approvalRequestId: null,
+    };
+    const requestId = e instanceof ApiError ? e.detailObject?.approval_request_id : undefined;
+    if (typeof requestId === 'number') failure.approvalRequestId = requestId;
+    setTransitionError(failure);
+    // Un 409 suele indicar que el ticket cambió (otro usuario, un guard que creó una aprobación...):
+    // se recarga para mostrar el estado y las aprobaciones vigentes.
+    if (failure.status === 409) void load(true);
+  }
+
+  function handleResolveFailed(transition: WorkflowTransition, failure: ResolveFailure) {
+    setResolveTransition(null);
+    handleTransitionError(failure.error, transition);
+    if (failure.classified) void load(true);
   }
 
   if (!validId || notFound) {
@@ -239,18 +283,92 @@ export default function TicketDetailPage() {
             <StatusBadge status={ticket.status} />
             <PriorityBadge priority={ticket.priority} />
             <span className="badge badge-outline">{ticket.type.name}</span>
+            {ticket.category && (
+              <span className={`badge badge-info ${ticketStyles.wrapBadge}`} title="Categoría">
+                {ticket.subcategory ? `${ticket.category.name} › ${ticket.subcategory.name}` : ticket.category.name}
+              </span>
+            )}
+            {ticket.vip && (
+              <span className={ticketStyles.vip} title="Solicitante VIP">
+                VIP
+              </span>
+            )}
             <SlaBadge ticket={ticket} />
           </div>
         }
         actions={
-          <button type="button" className="btn" onClick={() => void load()} disabled={loading}>
-            Actualizar
-          </button>
+          <>
+            {showWorkOrderAction && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  setCreatedWorkOrder(null);
+                  setShowWorkOrder(true);
+                }}
+              >
+                Trasladar a orden de trabajo
+              </button>
+            )}
+            <button type="button" className="btn" onClick={() => void load()} disabled={loading}>
+              Actualizar
+            </button>
+          </>
         }
       />
 
       <ErrorAlert error={catalogError} onRetry={() => void reloadCatalog()} />
       <ErrorAlert error={loadError} onRetry={() => void load()} />
+      {createdWorkOrder && (
+        <Alert
+          tone="success"
+          action={
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setCreatedWorkOrder(null)}>
+              Cerrar
+            </button>
+          }
+        >
+          Se creó la orden de trabajo{' '}
+          <Link href={`/tickets/${createdWorkOrder.id}`} className="mono">
+            {createdWorkOrder.key}
+          </Link>
+          .
+        </Alert>
+      )}
+
+      {resolveTransition && catalog && (
+        <ResolveDialog
+          ticket={ticket}
+          transition={resolveTransition}
+          targetName={stateName(resolveTransition.to_state_id)}
+          catalog={catalog}
+          needsCategory={needsCategory}
+          comment={transitionComment}
+          onCancel={() => setResolveTransition(null)}
+          onResolved={(updated) => {
+            setResolveTransition(null);
+            setTicket(updated);
+            setTransitionComment('');
+            setTransitionError(null);
+            void load(true);
+          }}
+          onFailed={(failure) => handleResolveFailed(resolveTransition, failure)}
+        />
+      )}
+
+      {showWorkOrder && catalog && (
+        <WorkOrderDialog
+          ticket={ticket}
+          catalog={catalog}
+          parentNeedsCategory={needsCategory}
+          onCancel={() => setShowWorkOrder(false)}
+          onCreated={(child) => {
+            setShowWorkOrder(false);
+            setCreatedWorkOrder(child);
+            void load(true);
+          }}
+        />
+      )}
 
       <div className="grid-main-aside ticket-layout">
         <div className="stack-lg ticket-main" style={{ minWidth: 0 }}>
@@ -281,6 +399,17 @@ export default function TicketDetailPage() {
               <p className="muted">Sin descripción.</p>
             )}
           </section>
+
+          <div className={`ticket-slot ticket-slot-resolution ${ticketStyles.slotResolution}`}>
+            <ResolutionPanel
+              ticket={ticket}
+              canEdit={canEdit}
+              onSaved={(updated) => {
+                setTicket(updated);
+                void load(true);
+              }}
+            />
+          </div>
 
           {(availableTransitions.length > 0 || transitionError) && (
             <section className="panel stack ticket-slot ticket-slot-transitions" aria-labelledby="transitions-title">
@@ -314,9 +443,18 @@ export default function TicketDetailPage() {
                       type="button"
                       className={`btn ${primary ? 'btn-primary' : 'btn-secondary'}`}
                       disabled={transitioning !== null}
-                      aria-expanded={isFinalTarget(tr) ? confirmTransition?.id === tr.id : undefined}
+                      aria-expanded={
+                        isResolving(tr) ? undefined : isFinalTarget(tr) ? confirmTransition?.id === tr.id : undefined
+                      }
+                      aria-haspopup={isResolving(tr) ? 'dialog' : undefined}
                       onClick={() => requestTransition(tr)}
-                      title={tr.requires_approval ? 'Esta transición requiere aprobación' : `Pasar a ${stateName(tr.to_state_id)}`}
+                      title={
+                        tr.requires_approval
+                          ? 'Esta transición requiere aprobación'
+                          : isResolving(tr)
+                            ? `Pasar a ${stateName(tr.to_state_id)} (pide la solución)`
+                            : `Pasar a ${stateName(tr.to_state_id)}`
+                      }
                     >
                       {transitioning === tr.id ? 'Aplicando…' : tr.name || stateName(tr.to_state_id)}
                       {tr.requires_approval && <span className="badge badge-warning">Aprobación</span>}
@@ -425,15 +563,31 @@ export default function TicketDetailPage() {
             </div>
             <dl className="dl">
               <dt>Solicitante</dt>
-              <dd>{ticket.requester.display_name}</dd>
+              <dd>
+                <span className="row-sm" style={{ display: 'inline-flex' }}>
+                  {ticket.requester.display_name}
+                  {ticket.vip && (
+                    <span className={ticketStyles.vip} title="Solicitante VIP">
+                      VIP
+                    </span>
+                  )}
+                </span>
+                {(ticket.requester_department || ticket.gerencia) && (
+                  <span className={ticketStyles.requesterMeta}>
+                    {[ticket.requester_department?.name, ticket.gerencia?.name].filter(Boolean).join(' · ')}
+                  </span>
+                )}
+              </dd>
               <dt>Asignado</dt>
               <dd>{ticket.assignee?.display_name ?? <span className="subtle">Sin asignar</span>}</dd>
-              <dt>Departamento</dt>
+              <dt>Atiende</dt>
               <dd>{ticket.department.name}</dd>
               <dt>Equipo</dt>
               <dd>{ticket.team?.name ?? <span className="subtle">Sin equipo</span>}</dd>
               <dt>Proyecto</dt>
               <dd>{ticket.project ? `${ticket.project.code} — ${ticket.project.name}` : <span className="subtle">—</span>}</dd>
+              <dt>Canal</dt>
+              <dd>{channelLabel(ticket.channel, catalog)}</dd>
               <dt>Creado</dt>
               <dd>{formatDateTime(ticket.created_at)}</dd>
               <dt>Actualizado</dt>
@@ -442,10 +596,40 @@ export default function TicketDetailPage() {
               <dd>{formatDateTime(ticket.first_response_at)}</dd>
               <dt>Resuelto</dt>
               <dd>{formatDateTime(ticket.resolved_at)}</dd>
+              {ticket.resolved_by && (
+                <>
+                  <dt>Resuelto por</dt>
+                  <dd>{ticket.resolved_by.display_name}</dd>
+                </>
+              )}
+              {ticket.business_resolution_minutes !== null && (
+                <>
+                  <dt>Tiempo hábil</dt>
+                  <dd>{formatBusinessMinutes(ticket.business_resolution_minutes)}</dd>
+                </>
+              )}
               <dt>Cerrado</dt>
               <dd>{formatDateTime(ticket.closed_at)}</dd>
             </dl>
           </section>
+
+          {catalog && (
+            <div className={`ticket-slot ticket-slot-classification ${ticketStyles.slotClassification}`}>
+              <ClassificationPanel
+                ticket={ticket}
+                catalog={catalog}
+                canEdit={canEdit}
+                onSaved={(updated) => {
+                  setTicket(updated);
+                  void load(true);
+                }}
+              />
+            </div>
+          )}
+
+          <div className={`ticket-slot ticket-slot-related ${ticketStyles.slotRelated}`}>
+            <RelatedTicketsPanel ticket={ticket} />
+          </div>
 
           <div className="ticket-slot ticket-slot-sla">
             <SlaPanel ticket={ticket} />

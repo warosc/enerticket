@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * Secciones de Administración: departamentos, equipos (con grupo AD/Keycloak), miembros y proyectos.
+ * Secciones de Administración: departamentos (gerencia, atención de tickets, activo), equipos (con grupo
+ * AD/Keycloak), miembros y proyectos. Las del catálogo de servicio están en CatalogAdminSections.tsx.
  * Todas usan los endpoints /admin/* (rol admin) e invalidan el catálogo compartido tras cada cambio.
  */
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
@@ -12,6 +13,7 @@ import { invalidateCatalog, useApiResource } from '@/lib/hooks';
 import type {
   Department,
   DepartmentInput,
+  Gerencia,
   Project,
   ProjectInput,
   Team,
@@ -23,7 +25,7 @@ import type {
 
 const MEMBER_ROLE_LABELS: Record<TeamMemberRole, string> = { member: 'Miembro', lead: 'Líder' };
 
-function useMutation() {
+export function useMutation() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -48,7 +50,7 @@ function useMutation() {
   return { busy, error, notice, run, clear: () => (setError(null), setNotice(null)) };
 }
 
-function Feedback({ error, notice }: { error: string | null; notice: string | null }) {
+export function Feedback({ error, notice }: { error: string | null; notice: string | null }) {
   if (error) return <Alert tone="error">{error}</Alert>;
   if (notice) return <Alert tone="success">{notice}</Alert>;
   return null;
@@ -58,17 +60,36 @@ function Feedback({ error, notice }: { error: string | null; notice: string | nu
 
 export function DepartmentsSection() {
   const { data, error, loading, reload } = useApiResource<Department[]>('/admin/departments');
+  const gerenciasRes = useApiResource<Gerencia[]>('/admin/gerencias');
+  const gerencias = useMemo(
+    () => [...(gerenciasRes.data ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'es')),
+    [gerenciasRes.data],
+  );
   const departments = useMemo(() => [...(data ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'es')), [data]);
   const mutation = useMutation();
   const [name, setName] = useState('');
   const [parentId, setParentId] = useState<number | ''>('');
+  const [gerenciaId, setGerenciaId] = useState<number | ''>('');
+  const [servesTickets, setServesTickets] = useState(false);
   const [editing, setEditing] = useState<Department | null>(null);
+  const [filter, setFilter] = useState<'all' | 'serving' | 'inactive'>('all');
 
   const nameOf = (id: number | null) => departments.find((d) => d.id === id)?.name ?? '—';
+  const gerenciaName = (id: number | null) =>
+    id === null ? null : (gerencias.find((g) => g.id === id)?.name ?? `#${id}`);
+  const visible = departments.filter((d) =>
+    filter === 'serving' ? d.serves_tickets && d.active : filter === 'inactive' ? !d.active : true,
+  );
 
   async function create(event: FormEvent) {
     event.preventDefault();
-    const payload: DepartmentInput = { name: name.trim(), parent_id: parentId === '' ? null : parentId };
+    const payload: DepartmentInput = {
+      name: name.trim(),
+      parent_id: parentId === '' ? null : parentId,
+      gerencia_id: gerenciaId === '' ? null : gerenciaId,
+      serves_tickets: servesTickets,
+      active: true,
+    };
     const created = await mutation.run(
       () => apiFetch<Department>('/admin/departments', { method: 'POST', body: payload }),
       `Departamento «${payload.name}» creado.`,
@@ -76,14 +97,32 @@ export function DepartmentsSection() {
     if (created) {
       setName('');
       setParentId('');
+      setServesTickets(false);
       void reload({ silent: true });
     }
+  }
+
+  async function toggleActive(department: Department) {
+    const updated = await mutation.run(
+      () =>
+        apiFetch<Department>(`/admin/departments/${department.id}`, {
+          method: 'PATCH',
+          body: { active: !department.active },
+        }),
+      department.active ? `Departamento «${department.name}» desactivado.` : `Departamento «${department.name}» activado.`,
+    );
+    if (updated) void reload({ silent: true });
   }
 
   async function saveEdit(event: FormEvent) {
     event.preventDefault();
     if (!editing) return;
-    const payload: DepartmentInput = { name: editing.name.trim(), parent_id: editing.parent_id };
+    const payload: DepartmentInput = {
+      name: editing.name.trim(),
+      parent_id: editing.parent_id,
+      gerencia_id: editing.gerencia_id,
+      serves_tickets: editing.serves_tickets,
+    };
     const updated = await mutation.run(
       () => apiFetch<Department>(`/admin/departments/${editing.id}`, { method: 'PATCH', body: payload }),
       'Departamento actualizado.',
@@ -120,6 +159,32 @@ export function DepartmentsSection() {
               ))}
             </select>
           </label>
+          <label className="field">
+            <span className="field-label">Gerencia</span>
+            <select
+              className="select"
+              value={gerenciaId}
+              onChange={(e) => setGerenciaId(e.target.value === '' ? '' : Number(e.target.value))}
+            >
+              <option value="">Sin gerencia</option>
+              {gerencias.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                  {g.active ? '' : ' (inactiva)'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="field">
+            <span className="field-label">Atención</span>
+            <label className="checkbox">
+              <input type="checkbox" checked={servesTickets} onChange={(e) => setServesTickets(e.target.checked)} />
+              Atiende tickets
+            </label>
+            <span className="field-hint">
+              Los departamentos de atención aparecen al crear tickets. Los del AD (solicitantes) normalmente no.
+            </span>
+          </div>
         </div>
         <div className="form-actions">
           <button className="btn btn-primary" disabled={mutation.busy || name.trim().length < 2}>
@@ -131,10 +196,20 @@ export function DepartmentsSection() {
       <Feedback error={mutation.error} notice={mutation.notice} />
 
       <section className="panel panel-flush">
-        <ErrorAlert error={error} onRetry={() => void reload()} />
+        <ErrorAlert error={error ?? gerenciasRes.error} onRetry={() => void (reload(), gerenciasRes.reload())} />
+        <div className="toolbar" style={{ padding: 'var(--space-3) var(--space-4)' }}>
+          <label className="field" style={{ maxWidth: 280 }}>
+            <span className="field-label">Mostrar</span>
+            <select className="select" value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}>
+              <option value="all">Todos ({departments.length})</option>
+              <option value="serving">Solo los que atienden tickets</option>
+              <option value="inactive">Inactivos</option>
+            </select>
+          </label>
+        </div>
         {loading && !data ? (
           <Loading />
-        ) : departments.length === 0 ? (
+        ) : visible.length === 0 ? (
           <EmptyState title="No hay departamentos" />
         ) : (
           <form onSubmit={saveEdit} className="table-wrap">
@@ -142,14 +217,17 @@ export function DepartmentsSection() {
               <thead>
                 <tr>
                   <th scope="col">Nombre</th>
+                  <th scope="col">Gerencia</th>
                   <th scope="col">Padre</th>
+                  <th scope="col">Atiende tickets</th>
+                  <th scope="col">Estado</th>
                   <th scope="col" className="text-right">
                     Acciones
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {departments.map((d) =>
+                {visible.map((d) =>
                   editing?.id === d.id ? (
                     <tr key={d.id}>
                       <td className="cell-head">
@@ -162,6 +240,23 @@ export function DepartmentsSection() {
                           maxLength={150}
                           aria-label="Nombre del departamento"
                         />
+                      </td>
+                      <td data-label="Gerencia">
+                        <select
+                          className="select select-sm"
+                          value={editing.gerencia_id ?? ''}
+                          onChange={(e) =>
+                            setEditing({ ...editing, gerencia_id: e.target.value === '' ? null : Number(e.target.value) })
+                          }
+                          aria-label="Gerencia"
+                        >
+                          <option value="">Sin gerencia</option>
+                          {gerencias.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              {g.name}
+                            </option>
+                          ))}
+                        </select>
                       </td>
                       <td data-label="Padre">
                         <select
@@ -182,6 +277,21 @@ export function DepartmentsSection() {
                             ))}
                         </select>
                       </td>
+                      <td data-label="Atiende tickets">
+                        <label className="checkbox">
+                          <input
+                            type="checkbox"
+                            checked={editing.serves_tickets}
+                            onChange={(e) => setEditing({ ...editing, serves_tickets: e.target.checked })}
+                          />
+                          Atiende tickets
+                        </label>
+                      </td>
+                      <td data-label="Estado">
+                        <span className={`badge ${d.active ? 'badge-success' : 'badge-neutral'}`}>
+                          {d.active ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </td>
                       <td className="text-right nowrap cell-actions">
                         <span className="row-actions">
                           <button type="submit" className="btn btn-primary btn-sm" disabled={mutation.busy}>
@@ -194,22 +304,47 @@ export function DepartmentsSection() {
                       </td>
                     </tr>
                   ) : (
-                    <tr key={d.id}>
+                    <tr key={d.id} style={d.active ? undefined : { opacity: 0.65 }}>
                       <td className="strong cell-head">{d.name}</td>
+                      <td data-label="Gerencia">
+                        {gerenciaName(d.gerencia_id) ?? <span className="subtle">Sin gerencia</span>}
+                      </td>
                       <td className="muted" data-label="Padre">
                         {nameOf(d.parent_id)}
                       </td>
+                      <td data-label="Atiende tickets">
+                        {d.serves_tickets ? (
+                          <span className="badge badge-primary">Sí</span>
+                        ) : (
+                          <span className="subtle">No</span>
+                        )}
+                      </td>
+                      <td data-label="Estado">
+                        <span className={`badge ${d.active ? 'badge-success' : 'badge-neutral'}`}>
+                          {d.active ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </td>
                       <td className="text-right cell-actions">
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          onClick={() => {
-                            mutation.clear();
-                            setEditing({ ...d });
-                          }}
-                        >
-                          Editar
-                        </button>
+                        <span className="row-actions">
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            onClick={() => {
+                              mutation.clear();
+                              setEditing({ ...d });
+                            }}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            disabled={mutation.busy}
+                            onClick={() => void toggleActive(d)}
+                          >
+                            {d.active ? 'Desactivar' : 'Activar'}
+                          </button>
+                        </span>
                       </td>
                     </tr>
                   ),

@@ -36,6 +36,10 @@ x-backend-env: &backend-env
   API_DOCS: ${API_DOCS:-}
   OIDC_MISSING_GROUPS_AS_EMPTY: ${OIDC_MISSING_GROUPS_AS_EMPTY:-true}
   SEED_TEAM_GROUPS: ${SEED_TEAM_GROUPS:-Telecomunicaciones:GG-SD-Telecomunicaciones,Seguridad de Redes:GG-SD-SeguridadRedes,Ciberseguridad / SOC:GG-SD-SOC,Riesgo y Cumplimiento:GG-SD-Riesgo,Proyectos TI:GG-SD-ProyectosTI,General:GG-SD-General}
+  # Fase 3: grupo AD de usuarios VIP (users.vip se sincroniza en cada login).
+  VIP_GROUP: ${VIP_GROUP:-GG-SD-VIP}
+  # Dominios permitidos para destinatarios de reportes programados (coma; vacío = cualquiera).
+  REPORT_RECIPIENT_DOMAINS: ${REPORT_RECIPIENT_DOMAINS-energuate.com}
   TZ_BUSINESS: ${TZ_BUSINESS:-America/Guatemala}
   S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
   S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
@@ -177,6 +181,10 @@ services:
       LDAP_FULL_SYNC_PERIOD: ${LDAP_FULL_SYNC_PERIOD:-86400}
       LDAP_CHANGED_SYNC_PERIOD: ${LDAP_CHANGED_SYNC_PERIOD:-3600}
       LDAP_SYNC_USERS_ON_START: ${LDAP_SYNC_USERS_ON_START:-false}
+      # Atributo LDAP con el departamento (claim "department"); vacío = sin mapper.
+      LDAP_DEPARTMENT_ATTRIBUTE: ${LDAP_DEPARTMENT_ATTRIBUTE-department}
+      # Grupo VIP que se crea en Keycloak si no existe (mismo valor que el backend).
+      VIP_GROUP: ${VIP_GROUP:-GG-SD-VIP}
     volumes:
       - ./keycloak/configure-ldap.sh:/opt/keycloak/scripts/configure-ldap.sh:ro
     depends_on:

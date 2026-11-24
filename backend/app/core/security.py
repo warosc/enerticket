@@ -22,13 +22,15 @@ from typing import Any
 
 import jwt
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.accounts import sync_profile
 from app.core.config import settings
 from app.core.db import get_db, utcnow
-from app.models.core import Team, TeamMember, User
+from app.models.catalog import Gerencia, GerenciaViewer
+from app.models.core import Department, Team, TeamMember, User
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,12 @@ class Principal:
     department_ids: set[int]
     groups: set[str] = field(default_factory=set)
     lead_team_ids: set[int] = field(default_factory=set)
+    # Perfil del AD (Fase 3): departamento y gerencia del usuario, VIP y gerencias cuyos
+    # tickets solicitados puede ver en solo lectura (grupo AD de la gerencia o asignación manual).
+    home_department_id: int | None = None
+    home_gerencia_id: int | None = None
+    vip: bool = False
+    viewer_gerencia_ids: set[int] = field(default_factory=set)
 
     @property
     def is_admin(self) -> bool:
@@ -94,6 +102,8 @@ class Identity:
     email: str | None
     roles: set[str]
     groups: set[str] | None  # None = el token no trae el claim; no se sincronizan equipos
+    # Atributo ``department`` del AD (claim ``department``); None = no viene, no se toca.
+    department: str | None = None
 
 
 class AuthError(Exception):
@@ -289,7 +299,18 @@ def identity_from_claims(claims: dict[str, Any]) -> Identity:
         email=str(email)[:255] if email else None,
         roles=roles,
         groups=groups,
+        department=_department_claim(claims.get("department")),
     )
+
+
+def _department_claim(value: Any) -> str | None:
+    """Claim ``department``: texto (o lista de un valor, atributo multivaluado de Keycloak)."""
+    if isinstance(value, (list, tuple)):
+        value = next((item for item in value if str(item or "").strip()), None)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text[:200] if text else None
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -302,8 +323,12 @@ def identity_from_dev(
     groups: Iterable[str] | str | None = None,
     display_name: str | None = None,
     email: str | None = None,
+    department: str | None = None,
 ) -> Identity:
-    """Identidad de laboratorio (AUTH_MODE=dev). ``groups=None`` no sincroniza equipos."""
+    """Identidad de laboratorio (AUTH_MODE=dev). ``groups=None`` no sincroniza equipos.
+
+    ``department`` (cabecera opcional ``X-Dev-Department``) simula el atributo AD.
+    """
     username = (username or "").strip()
     if not username:
         raise AuthError("Encabezado X-Dev-User requerido en AUTH_MODE=dev")
@@ -323,6 +348,7 @@ def identity_from_dev(
         email=email or None,
         roles=role_set,
         groups=group_set,
+        department=_department_claim(department),
     )
 
 
@@ -420,12 +446,17 @@ def _upsert_user(session: Session, identity: Identity) -> tuple[User, bool]:
 def build_principal(
     session: Session, user: User, roles: set[str], groups: set[str] | None = None
 ) -> Principal:
-    """Construye el ``Principal`` a partir del usuario y su pertenencia a equipos."""
+    """Construye el ``Principal`` a partir del usuario, sus equipos y su perfil del AD."""
     rows = session.execute(
         select(TeamMember.team_id, TeamMember.role, Team.department_id)
         .join(Team, Team.id == TeamMember.team_id)
         .where(TeamMember.user_id == user.id)
     ).all()
+    home_gerencia_id = None
+    if user.department_id is not None:
+        home_gerencia_id = session.scalar(
+            select(Department.gerencia_id).where(Department.id == user.department_id)
+        )
     return Principal(
         user_id=user.id,
         sub=user.keycloak_sub,
@@ -437,6 +468,23 @@ def build_principal(
         department_ids={row.department_id for row in rows},
         groups=set(groups or ()),
         lead_team_ids={row.team_id for row in rows if row.role == "lead"},
+        home_department_id=user.department_id,
+        home_gerencia_id=home_gerencia_id,
+        vip=bool(user.vip),
+        viewer_gerencia_ids=viewer_gerencia_ids(session, user.id, groups),
+    )
+
+
+def viewer_gerencia_ids(session: Session, user_id: int, groups: Iterable[str] | None) -> set[int]:
+    """Gerencias activas cuyos tickets solicitados puede ver: por grupo AD o asignación manual."""
+    conditions = [
+        Gerencia.id.in_(select(GerenciaViewer.gerencia_id).where(GerenciaViewer.user_id == user_id))
+    ]
+    lowered = sorted({g.strip().lower() for g in groups or () if g and g.strip()})
+    if lowered:
+        conditions.append(func.lower(Gerencia.external_group).in_(lowered))
+    return set(
+        session.scalars(select(Gerencia.id).where(Gerencia.active.is_(True), or_(*conditions))).all()
     )
 
 
@@ -449,6 +497,8 @@ def provision_principal(session: Session, identity: Identity) -> Principal:
                 session.rollback()
                 raise AuthError("Usuario desactivado", status.HTTP_403_FORBIDDEN)
             if identity.groups is not None and sync_team_memberships(session, user, identity.groups):
+                changed = True
+            if sync_profile(session, user, identity.department, identity.groups):
                 changed = True
             if changed:
                 session.commit()
@@ -471,11 +521,14 @@ def principal_from_dev(
     username: str | None,
     roles: Iterable[str] | str | None = None,
     groups: Iterable[str] | str | None = None,
+    department: str | None = None,
 ) -> Principal:
     """``Principal`` de laboratorio (solo si AUTH_MODE=dev)."""
     if settings.auth_mode != "dev":
         raise AuthError("Modo dev deshabilitado", status.HTTP_401_UNAUTHORIZED)
-    return provision_principal(session, identity_from_dev(username, roles, groups))
+    return provision_principal(
+        session, identity_from_dev(username, roles, groups, department=department)
+    )
 
 
 def _bearer_token(request: Request) -> str:
@@ -490,7 +543,8 @@ def get_principal(request: Request, session: Session = Depends(get_db)) -> Princ
     """Dependencia FastAPI: autentica la petición y devuelve el ``Principal``.
 
     - ``AUTH_MODE=oidc``: JWT Bearer validado contra Keycloak.
-    - ``AUTH_MODE=dev``: headers ``X-Dev-User``, ``X-Dev-Roles`` (csv), ``X-Dev-Groups`` (csv).
+    - ``AUTH_MODE=dev``: headers ``X-Dev-User``, ``X-Dev-Roles`` (csv), ``X-Dev-Groups`` (csv) y
+      opcional ``X-Dev-Department`` (atributo ``department`` del AD).
     """
     try:
         if settings.auth_mode == "dev":
@@ -501,6 +555,7 @@ def get_principal(request: Request, session: Session = Depends(get_db)) -> Princ
                 headers.get("x-dev-groups") if "x-dev-groups" in headers else None,
                 headers.get("x-dev-name"),
                 headers.get("x-dev-email"),
+                headers.get("x-dev-department"),
             )
             principal = provision_principal(session, identity)
         else:

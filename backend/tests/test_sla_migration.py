@@ -36,7 +36,8 @@ def test_revision_chain():
 
 def test_upgrade_matches_models_and_downgrade_removes_tables(sqlite_url):
     config = alembic_config(sqlite_url)
-    command.upgrade(config, "0002_sla")
+    # Se compara en la cabeza: 0006_catalog agrega columnas a sla_policies.
+    command.upgrade(config, "head")
     engine = sa.create_engine(sqlite_url)
     try:
         inspector = sa.inspect(engine)

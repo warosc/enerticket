@@ -62,7 +62,8 @@ def test_revision_chain_starts_with_core():
 
 def test_upgrade_matches_models_and_renames_legacy(sqlite_url):
     create_legacy_schema(sqlite_url)
-    command.upgrade(alembic_config(sqlite_url), "0001_core")
+    # Se compara en la cabeza: migraciones posteriores (0006_catalog) agregan columnas core.
+    command.upgrade(alembic_config(sqlite_url), "head")
 
     engine = sa.create_engine(sqlite_url)
     try:

@@ -1,4 +1,5 @@
-"""Catálogo: departamentos, equipos, prioridades, tipos, proyectos y flujo por defecto."""
+"""Catálogo: departamentos, equipos, prioridades, tipos, proyectos, flujo por defecto y
+catálogo de servicio (categorías, subcategorías, proveedores, canales y gerencias)."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import Principal, get_principal
+from app.models.catalog import Gerencia, Provider, TicketCategory, TicketSubcategory
 from app.models.core import (
     Department,
     Priority,
@@ -19,6 +21,7 @@ from app.models.core import (
     WorkflowTransition,
 )
 from app.schemas.core import CatalogOut
+from app.services.tickets import CHANNEL_LABELS
 
 router = APIRouter(tags=["catálogo"])
 
@@ -80,11 +83,21 @@ def catalog(
     departments = session.scalars(select(Department).order_by(Department.name)).all()
     teams = session.scalars(select(Team).order_by(Team.name)).all()
     priorities = session.scalars(select(Priority).order_by(Priority.rank)).all()
-    types = session.scalars(select(TicketType).order_by(TicketType.id)).all()
+    types = session.scalars(
+        select(TicketType).where(TicketType.active.is_(True)).order_by(TicketType.id)
+    ).all()
     projects = session.scalars(select(Project).order_by(Project.code)).all()
     return {
         "departments": [
-            {"id": d.id, "name": d.name, "parent_id": d.parent_id} for d in departments
+            {
+                "id": d.id,
+                "name": d.name,
+                "parent_id": d.parent_id,
+                "gerencia_id": d.gerencia_id,
+                "serves_tickets": bool(d.serves_tickets),
+                "active": bool(d.active),
+            }
+            for d in departments
         ],
         "teams": [
             {
@@ -110,4 +123,49 @@ def catalog(
             for p in projects
         ],
         "workflow": workflow_payload(session),
+        **service_catalog_payload(session),
+    }
+
+
+def service_catalog_payload(session: Session) -> dict:
+    """Categorías activas (con sus subcategorías activas), proveedores, canales y gerencias."""
+    categories = session.scalars(
+        select(TicketCategory)
+        .where(TicketCategory.active.is_(True))
+        .order_by(TicketCategory.department_id, TicketCategory.sort_order, TicketCategory.name)
+    ).all()
+    subcategories: dict[int, list[TicketSubcategory]] = {}
+    if categories:
+        for sub in session.scalars(
+            select(TicketSubcategory)
+            .where(
+                TicketSubcategory.active.is_(True),
+                TicketSubcategory.category_id.in_([c.id for c in categories]),
+            )
+            .order_by(TicketSubcategory.sort_order, TicketSubcategory.name)
+        ).all():
+            subcategories.setdefault(sub.category_id, []).append(sub)
+    providers = session.scalars(
+        select(Provider).where(Provider.active.is_(True)).order_by(Provider.name)
+    ).all()
+    gerencias = session.scalars(
+        select(Gerencia).where(Gerencia.active.is_(True)).order_by(Gerencia.name)
+    ).all()
+    return {
+        "categories": [
+            {
+                "id": c.id,
+                "department_id": c.department_id,
+                "name": c.name,
+                "type_keys": list(c.type_keys or []),
+                "subcategories": [{"id": s.id, "name": s.name} for s in subcategories.get(c.id, [])],
+            }
+            for c in categories
+        ],
+        "providers": [
+            {"id": p.id, "name": p.name, "department_ids": list(p.department_ids or [])}
+            for p in providers
+        ],
+        "channels": [{"key": key, "label": label} for key, label in CHANNEL_LABELS.items()],
+        "gerencias": [{"id": g.id, "name": g.name} for g in gerencias],
     }
