@@ -29,6 +29,8 @@ const TOKEN_MIN_VALIDITY = 30;
 const TOKEN_REFRESH_INTERVAL_MS = 20_000;
 const LOGIN_LOOP_GUARD_KEY = 'esd.lastLoginRedirect';
 const LOGIN_LOOP_WINDOW_MS = 30_000;
+/** Marca de "acabo de cerrar sesión": al volver de Keycloak se omite check-sso y se va directo al login. */
+const JUST_LOGGED_OUT_KEY = 'esd.justLoggedOut';
 
 // ---------- Identidad de laboratorio ----------
 
@@ -279,18 +281,45 @@ async function redirectToLogin(kc: Keycloak): Promise<void> {
   await kc.login({ redirectUri: window.location.href });
 }
 
+function setJustLoggedOut(value: boolean): void {
+  try {
+    if (value) window.sessionStorage.setItem(JUST_LOGGED_OUT_KEY, '1');
+    else window.sessionStorage.removeItem(JUST_LOGGED_OUT_KEY);
+  } catch {
+    // Sin sessionStorage se hace el check-sso normal (más lento, pero correcto).
+  }
+}
+
+/** Lee y borra la marca de cierre de sesión (solo vale para la primera carga tras el logout). */
+function consumeJustLoggedOut(): boolean {
+  try {
+    const value = window.sessionStorage.getItem(JUST_LOGGED_OUT_KEY) === '1';
+    window.sessionStorage.removeItem(JUST_LOGGED_OUT_KEY);
+    return value;
+  } catch {
+    return false;
+  }
+}
+
 function initKeycloak(): Promise<Keycloak> {
   if (!keycloakInitPromise) {
     keycloakInitPromise = (async () => {
       const { default: KeycloakCtor } = await import('keycloak-js');
       const kc = new KeycloakCtor({ url: KEYCLOAK_URL, realm: KEYCLOAK_REALM, clientId: KEYCLOAK_CLIENT_ID });
-      await kc.init({
-        onLoad: 'check-sso',
-        pkceMethod: 'S256',
-        checkLoginIframe: false,
-        silentCheckSsoRedirectUri: `${window.location.origin}/silent-check-sso.html`,
-        silentCheckSsoFallback: true,
-      });
+      // Tras cerrar sesión ya se sabe que no hay sesión SSO: se omiten la prueba de cookies de
+      // terceros y el iframe silencioso (en Firefox, además, una redirección completa de ida y vuelta).
+      const skipSsoCheck = consumeJustLoggedOut();
+      await kc.init(
+        skipSsoCheck
+          ? { pkceMethod: 'S256', checkLoginIframe: false }
+          : {
+              onLoad: 'check-sso',
+              pkceMethod: 'S256',
+              checkLoginIframe: false,
+              silentCheckSsoRedirectUri: `${window.location.origin}/silent-check-sso.html`,
+              silentCheckSsoFallback: true,
+            },
+      );
       keycloakInstance = kc;
       return kc;
     })().catch((error: unknown) => {
@@ -500,9 +529,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus('redirecting');
     if (kc) {
       try {
+        setJustLoggedOut(true);
         await kc.logout({ redirectUri: `${window.location.origin}/` });
         return;
       } catch (e) {
+        setJustLoggedOut(false);
         setError(`No se pudo cerrar la sesión: ${errorMessage(e)}`);
         setStatus('error');
         return;

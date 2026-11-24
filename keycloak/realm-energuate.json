@@ -17,7 +17,7 @@
   "userManagedAccessAllowed": false,
   "organizationsEnabled": false,
   "internationalizationEnabled": true,
-  "supportedLocales": ["es", "en"],
+  "supportedLocales": ["es"],
   "defaultLocale": "es",
   "passwordPolicy": "length(12) and notUsername and notEmail and maxLength(128) and passwordHistory(5)",
 

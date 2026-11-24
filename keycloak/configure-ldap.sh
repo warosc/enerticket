@@ -483,6 +483,14 @@ apply_login_theme() {
     log "tema de login '$_theme' asignado al realm $KC_REALM"
 }
 
+# --- idioma ----------------------------------------------------------------------
+# Portal solo en español: sin selector de idioma en el login. Se fija aquí porque el realm
+# ya importado no recibe cambios de realm-energuate.json. Idempotente.
+apply_spanish_only() {
+    kc update "realms/$KC_REALM"         -s internationalizationEnabled=true         -s 'supportedLocales=["es"]'         -s defaultLocale=es
+    log "idioma del realm $KC_REALM fijado en español (sin selector de idioma)"
+}
+
 # --- federación LDAP / Active Directory -----------------------------------------
 
 validate_ldap_settings() {
@@ -712,6 +720,7 @@ main() {
     configure_ldap
     apply_group_role_map
     apply_login_theme
+    apply_spanish_only
     log "configuración de Keycloak completada"
 }
 

@@ -17,3 +17,7 @@ frontend/tsconfig.tsbuildinfo
 # Copias de seguridad y certificados locales
 backups/
 *.dump
+
+# Reportes/exportaciones de trabajo con datos personales: nunca al repo.
+*.xlsx
+*.xls
