@@ -17,7 +17,7 @@ export default function DevLogin() {
   const initial = devIdentity ?? DEV_PRESETS[1];
   const [user, setUser] = useState(initial.user);
   const [name, setName] = useState(initial.name ?? '');
-  const [roles, setRoles] = useState<Role[]>(initial.roles);
+  const [roles, setRoles] = useState<Role[]>(initial.roles.filter((r) => r !== 'requester'));
   const [groups, setGroups] = useState<string[]>(initial.groups);
   const [extraGroups, setExtraGroups] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
@@ -25,7 +25,7 @@ export default function DevLogin() {
   function applyPreset(preset: DevIdentity) {
     setUser(preset.user);
     setName(preset.name ?? '');
-    setRoles(preset.roles);
+    setRoles(preset.roles.filter((r) => r !== 'requester'));
     setGroups(preset.groups);
     setExtraGroups('');
     setFormError(null);
@@ -56,8 +56,11 @@ export default function DevLogin() {
     setDevIdentity(identity);
   }
 
+  // Compara sin el rol implícito "requester" y sin importar el orden.
+  const roleKey = (list: Role[]) => list.filter((r) => r !== 'requester').sort().join();
+  const groupKey = (list: string[]) => [...list].sort().join();
   const selectedPreset = DEV_PRESETS.find(
-    (p) => p.user === user && p.roles.join() === roles.join() && p.groups.join() === groups.join(),
+    (p) => p.user === user && roleKey(p.roles) === roleKey(roles) && groupKey(p.groups) === groupKey(groups),
   );
 
   return (
@@ -85,8 +88,12 @@ export default function DevLogin() {
 
         <fieldset className="stack-sm" style={{ border: 0, padding: 0, margin: 0 }}>
           <legend className="field-label" style={{ marginBottom: 8 }}>
-            Perfiles predefinidos
+            Usuarios de demostración
           </legend>
+          <p className="field-hint">
+            Coinciden con los datos de ejemplo del backend (<span className="mono">SEED_DEMO=true</span>). También
+            puede definir una identidad propia más abajo.
+          </p>
           <div className="choice-grid">
             {DEV_PRESETS.map((preset) => (
               <button

@@ -21,7 +21,8 @@ case "${1:-api}" in
             --port "${PORT:-8000}" \
             --workers "${UVICORN_WORKERS:-1}" \
             --proxy-headers \
-            --forwarded-allow-ips "${FORWARDED_ALLOW_IPS:-127.0.0.1}"
+            --forwarded-allow-ips "${FORWARDED_ALLOW_IPS:-127.0.0.1}" \
+            --ws-max-size "${WS_MAX_MESSAGE_BYTES:-16384}"
         ;;
     migrate)
         run_migrations

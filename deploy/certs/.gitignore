@@ -1,0 +1,4 @@
+# Certificados TLS corporativos (no se versionan). Ver docs/DEPLOYMENT.md.
+*
+!.gitignore
+!README.md

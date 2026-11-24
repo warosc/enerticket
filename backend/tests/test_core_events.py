@@ -73,8 +73,10 @@ def test_transition_and_comment_events(client, agent, requester, create_ticket, 
     ticket = create_ticket(requester)
     published_events.clear()
     transition(agent, ticket["id"], "in_progress", comment="En camino")
-    assert [p["type"] for p in published_events] == ["ticket.transitioned", "ticket.commented"]
-    moved, commented = published_events
+    # Otros módulos (p.ej. notificaciones) pueden publicar eventos propios: solo se comparan los ticket.*.
+    ticket_events = [p for p in published_events if p["type"].startswith("ticket.")]
+    assert [p["type"] for p in ticket_events] == ["ticket.transitioned", "ticket.commented"]
+    moved, commented = ticket_events
     assert moved["data"]["from_state"] == "new" and moved["data"]["to_state"] == "in_progress"
     assert moved["data"]["from_category"] == "todo" and moved["data"]["to_category"] == "in_progress"
     assert commented["data"]["visibility"] == "public"

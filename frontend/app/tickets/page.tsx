@@ -8,20 +8,28 @@ import SlaBadge from '@/components/ticket/SlaBadge';
 import CreateTicketForm from '@/components/tickets/CreateTicketForm';
 import { Alert, EmptyState, ErrorAlert, Loading, PageHeader, Pagination, PriorityBadge, StatusBadge } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
-import { formatDateTime, formatRelative } from '@/lib/format';
+import { CATEGORY_LABELS, formatDateTime, formatRelative } from '@/lib/format';
 import { useApiResource, useCatalog, useDebouncedValue } from '@/lib/hooks';
 import { useTicketEvents } from '@/lib/realtime';
-import type { TicketOut, TicketPage, TicketSort } from '@/lib/types';
+import type { StateCategory, TicketOut, TicketPage, TicketSort } from '@/lib/types';
 
 const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZES = [10, 25, 50, 100];
 
+type Scope = '' | 'mine' | 'assigned' | 'unassigned';
+const SCOPES: readonly Scope[] = ['mine', 'assigned', 'unassigned'];
+const CATEGORY_OPTIONS: [string, string][] = [
+  ['todo,in_progress,waiting', 'Abiertos (sin finalizar)'],
+  ...(Object.entries(CATEGORY_LABELS) as [StateCategory, string][]),
+];
+
 interface Filters {
   status: string;
+  category: string;
   priority: string;
   department_id: string;
   team_id: string;
-  scope: '' | 'mine' | 'assigned';
+  scope: Scope;
   q: string;
   sort: TicketSort;
   page: number;
@@ -39,14 +47,16 @@ const SORT_OPTIONS: { value: TicketSort; label: string }[] = [
 function parseFilters(params: URLSearchParams): Filters {
   const page = Number(params.get('page'));
   const pageSize = Number(params.get('page_size'));
-  const scope = params.get('scope');
+  const scope = params.get('scope') as Scope | null;
+  const category = params.get('category') ?? '';
   const sort = params.get('sort') as TicketSort | null;
   return {
     status: params.get('status') ?? '',
+    category: CATEGORY_OPTIONS.some(([key]) => key === category) ? category : '',
     priority: params.get('priority') ?? '',
     department_id: params.get('department_id') ?? '',
     team_id: params.get('team_id') ?? '',
-    scope: scope === 'mine' || scope === 'assigned' ? scope : '',
+    scope: scope && SCOPES.includes(scope) ? scope : '',
     q: params.get('q') ?? '',
     sort: sort && SORT_OPTIONS.some((o) => o.value === sort) ? sort : '-created_at',
     page: Number.isInteger(page) && page > 0 ? page : 1,
@@ -72,6 +82,7 @@ function TicketsView() {
       const next: Filters = { ...filters, ...changes, ...(resetPage && !('page' in changes) ? { page: 1 } : {}) };
       const params = new URLSearchParams();
       if (next.status) params.set('status', next.status);
+      if (next.category) params.set('category', next.category);
       if (next.priority) params.set('priority', next.priority);
       if (next.department_id) params.set('department_id', next.department_id);
       if (next.team_id) params.set('team_id', next.team_id);
@@ -99,11 +110,13 @@ function TicketsView() {
   const query = useMemo(
     () => ({
       status: filters.status || undefined,
+      category: filters.category || undefined,
       priority: filters.priority || undefined,
       department_id: filters.department_id || undefined,
       team_id: filters.team_id || undefined,
       mine: filters.scope === 'mine' ? true : undefined,
       assignee_id: filters.scope === 'assigned' && user ? user.id : undefined,
+      unassigned: filters.scope === 'unassigned' ? true : undefined,
       q: filters.q || undefined,
       sort: filters.sort,
       page: filters.page,
@@ -145,7 +158,13 @@ function TicketsView() {
   const priorities = useMemo(() => (catalog ? [...catalog.priorities].sort((a, b) => b.rank - a.rank) : []), [catalog]);
 
   const hasFilters = Boolean(
-    filters.status || filters.priority || filters.department_id || filters.team_id || filters.scope || filters.q,
+    filters.status ||
+      filters.category ||
+      filters.priority ||
+      filters.department_id ||
+      filters.team_id ||
+      filters.scope ||
+      filters.q,
   );
 
   function clearFilters() {
@@ -228,6 +247,21 @@ function TicketsView() {
             </select>
           </label>
           <label className="field">
+            <span className="field-label">Categoría</span>
+            <select
+              className="select"
+              value={filters.category}
+              onChange={(e) => updateFilters({ category: e.target.value })}
+            >
+              <option value="">Todas</option>
+              {CATEGORY_OPTIONS.map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
             <span className="field-label">Prioridad</span>
             <select
               className="select"
@@ -278,6 +312,7 @@ function TicketsView() {
               <option value="">Todos los visibles</option>
               <option value="mine">Creados por mí o asignados a mí</option>
               {isAgent && <option value="assigned">Asignados a mí</option>}
+              {isAgent && <option value="unassigned">Sin asignar</option>}
             </select>
           </label>
           <label className="field">

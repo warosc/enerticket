@@ -8,6 +8,7 @@ import AttachmentsPanel from '@/components/ticket/AttachmentsPanel';
 import SlaBadge from '@/components/ticket/SlaBadge';
 import SlaPanel from '@/components/ticket/SlaPanel';
 import TicketComments from '@/components/tickets/TicketComments';
+import TicketContentEditor from '@/components/tickets/TicketContentEditor';
 import TicketEditPanel from '@/components/tickets/TicketEditPanel';
 import TicketHistory from '@/components/tickets/TicketHistory';
 import { Alert, EmptyState, ErrorAlert, Loading, PageHeader, PriorityBadge, StatusBadge } from '@/components/ui';
@@ -16,12 +17,14 @@ import { useAuth } from '@/lib/auth';
 import { formatDateTime } from '@/lib/format';
 import { useCatalog } from '@/lib/hooks';
 import { useTicketEvents, type TicketEvent } from '@/lib/realtime';
+import { canEditTicket, transitionsFor } from '@/lib/ticketRules';
 import type {
   TicketComment,
   TicketHistoryEntry,
   TicketOut,
   TransitionRequest,
   UserOut,
+  UserRef,
   WorkflowTransition,
 } from '@/lib/types';
 
@@ -48,7 +51,8 @@ export default function TicketDetailPage() {
 
   const [transitionComment, setTransitionComment] = useState('');
   const [transitioning, setTransitioning] = useState<number | null>(null);
-  const [transitionError, setTransitionError] = useState<string | null>(null);
+  const [transitionError, setTransitionError] = useState<TransitionFailure | null>(null);
+  const [editingContent, setEditingContent] = useState(false);
 
   const requestId = useRef(0);
 
@@ -122,18 +126,25 @@ export default function TicketDetailPage() {
 
   const reloadSilently = useCallback(() => void load(true), [load]);
 
-  const availableTransitions = useMemo<WorkflowTransition[]>(() => {
-    if (!catalog || !ticket) return [];
-    const states = new Map(catalog.workflow.states.map((s) => [s.id, s]));
-    return catalog.workflow.transitions.filter((tr) => {
-      if (tr.from_state_id !== ticket.status.id) return false;
-      if (isAgent) return true;
-      // Solicitantes: solo cerrar o reabrir sus propios tickets (la API valida el resto).
-      if (ticket.requester.id !== user?.id) return false;
-      const to = states.get(tr.to_state_id);
-      return Boolean(to?.is_final || ticket.status.category === 'done');
-    });
-  }, [catalog, ticket, isAgent, user?.id]);
+  // Nombres conocidos para el historial: agentes (si se pudieron cargar) más las personas del ticket y comentarios.
+  const knownUsers = useMemo<UserRef[]>(() => {
+    const map = new Map<number, UserRef>();
+    for (const u of agents) map.set(u.id, { id: u.id, display_name: u.display_name });
+    for (const c of comments) if (c.author) map.set(c.author.id, c.author);
+    if (ticket?.assignee) map.set(ticket.assignee.id, ticket.assignee);
+    if (ticket?.requester) map.set(ticket.requester.id, ticket.requester);
+    for (const h of history) if (h.actor) map.set(h.actor.id, h.actor);
+    return Array.from(map.values());
+  }, [agents, comments, history, ticket?.assignee, ticket?.requester]);
+
+  // Mismas reglas que el backend (core/permissions.py); la API vuelve a validar todo.
+  const canEdit = Boolean(user && ticket && canEditTicket(user, ticket));
+  const availableTransitions = useMemo<WorkflowTransition[]>(
+    () => (catalog && ticket && user ? transitionsFor(catalog.workflow, ticket, user) : []),
+    [catalog, ticket, user],
+  );
+
+  const stateName = (id: number) => catalog?.workflow.states.find((s) => s.id === id)?.name ?? '';
 
   async function runTransition(transition: WorkflowTransition) {
     if (!ticket) return;
@@ -147,7 +158,19 @@ export default function TicketDetailPage() {
       setTransitionComment('');
       void load(true);
     } catch (e) {
-      setTransitionError(errorMessage(e));
+      const failure: TransitionFailure = {
+        message: errorMessage(e),
+        code: e instanceof ApiError ? e.code : null,
+        status: e instanceof ApiError ? e.status : 0,
+        transitionName: transition.name || stateName(transition.to_state_id),
+        approvalRequestId: null,
+      };
+      const requestId = e instanceof ApiError ? e.detailObject?.approval_request_id : undefined;
+      if (typeof requestId === 'number') failure.approvalRequestId = requestId;
+      setTransitionError(failure);
+      // Un 409 suele indicar que el ticket cambió (otro usuario, un guard que creó una aprobación...):
+      // se recarga para mostrar el estado y las aprobaciones vigentes.
+      if (failure.status === 409) void load(true);
     } finally {
       setTransitioning(null);
     }
@@ -177,8 +200,6 @@ export default function TicketDetailPage() {
     );
   }
 
-  const stateName = (id: number) => catalog?.workflow.states.find((s) => s.id === id)?.name ?? '';
-
   return (
     <div className="page">
       <PageHeader
@@ -189,12 +210,12 @@ export default function TicketDetailPage() {
         }
         title={ticket.title}
         subtitle={
-          <span className="row-sm" style={{ marginTop: 4 }}>
+          <div className="ticket-meta-row">
             <StatusBadge status={ticket.status} />
             <PriorityBadge priority={ticket.priority} />
             <span className="badge badge-outline">{ticket.type.name}</span>
             <SlaBadge ticket={ticket} />
-          </span>
+          </div>
         }
         actions={
           <button type="button" className="btn" onClick={() => void load()} disabled={loading}>
@@ -208,11 +229,28 @@ export default function TicketDetailPage() {
 
       <div className="grid-main-aside">
         <div className="stack-lg" style={{ minWidth: 0 }}>
-          <section className="panel">
+          <section className="panel" aria-labelledby="description-title">
             <div className="panel-header">
-              <h2 className="panel-title">Descripción</h2>
+              <h2 className="panel-title" id="description-title">
+                Descripción
+              </h2>
+              {canEdit && !editingContent && (
+                <button type="button" className="btn btn-sm" onClick={() => setEditingContent(true)}>
+                  Editar
+                </button>
+              )}
             </div>
-            {ticket.description ? (
+            {editingContent ? (
+              <TicketContentEditor
+                ticket={ticket}
+                onCancel={() => setEditingContent(false)}
+                onSaved={(updated) => {
+                  setTicket(updated);
+                  setEditingContent(false);
+                  void load(true);
+                }}
+              />
+            ) : ticket.description ? (
               <p className="pre-wrap">{ticket.description}</p>
             ) : (
               <p className="muted">Sin descripción.</p>
@@ -227,7 +265,9 @@ export default function TicketDetailPage() {
                 </h2>
                 <span className="panel-subtitle">Estado actual: {ticket.status.name}</span>
               </div>
-              {transitionError && <Alert tone="error">{transitionError}</Alert>}
+              {transitionError && (
+                <TransitionErrorAlert failure={transitionError} onDismiss={() => setTransitionError(null)} />
+              )}
               <label className="field">
                 <span className="field-label">Comentario de la transición (opcional)</span>
                 <textarea
@@ -269,6 +309,8 @@ export default function TicketDetailPage() {
               <button
                 type="button"
                 role="tab"
+                id="tab-comments"
+                aria-controls="tabpanel-activity"
                 aria-selected={tab === 'comments'}
                 className={`tab${tab === 'comments' ? ' is-active' : ''}`}
                 onClick={() => setTab('comments')}
@@ -278,6 +320,8 @@ export default function TicketDetailPage() {
               <button
                 type="button"
                 role="tab"
+                id="tab-history"
+                aria-controls="tabpanel-activity"
                 aria-selected={tab === 'history'}
                 className={`tab${tab === 'history' ? ' is-active' : ''}`}
                 onClick={() => setTab('history')}
@@ -285,20 +329,25 @@ export default function TicketDetailPage() {
                 Historial ({history.length})
               </button>
             </div>
-            <div role="tabpanel" style={{ paddingTop: 'var(--space-4)' }}>
+            <div
+              role="tabpanel"
+              id="tabpanel-activity"
+              aria-labelledby={tab === 'comments' ? 'tab-comments' : 'tab-history'}
+              style={{ paddingTop: 'var(--space-4)' }}
+            >
               {tab === 'comments' ? (
                 <TicketComments
                   ticketId={ticket.id}
                   comments={comments}
                   canComment
-                  canUseInternal={isAgent}
+                  canUseInternal={canEdit}
                   onAdded={(comment) => {
                     setComments((prev) => [...prev, comment]);
                     void load(true);
                   }}
                 />
               ) : (
-                <TicketHistory entries={history} catalog={catalog} users={agents} />
+                <TicketHistory entries={history} catalog={catalog} users={knownUsers} />
               )}
             </div>
           </section>
@@ -336,7 +385,7 @@ export default function TicketDetailPage() {
 
           <SlaPanel ticket={ticket} />
 
-          {isAgent && catalog && user && (
+          {canEdit && catalog && user && (
             <TicketEditPanel
               ticket={ticket}
               catalog={catalog}
@@ -352,5 +401,50 @@ export default function TicketDetailPage() {
         </aside>
       </div>
     </div>
+  );
+}
+
+interface TransitionFailure {
+  message: string;
+  code: string | null;
+  status: number;
+  transitionName: string;
+  /** Solicitud de aprobación creada o pendiente (409 approval_required del módulo de flujos). */
+  approvalRequestId: number | null;
+}
+
+/** Error de transición: destaca los bloqueos de guards (409), en especial la aprobación pendiente. */
+function TransitionErrorAlert({ failure, onDismiss }: { failure: TransitionFailure; onDismiss: () => void }) {
+  const dismiss = (
+    <button type="button" className="btn btn-sm btn-ghost" onClick={onDismiss}>
+      Cerrar
+    </button>
+  );
+  if (failure.code === 'approval_required') {
+    return (
+      <Alert tone="warning" title="Aprobación requerida" action={dismiss}>
+        <p>{failure.message}</p>
+        <p className="text-sm" style={{ marginTop: 4 }}>
+          Puede seguir su avance en el panel de aprobaciones de este ticket o en la{' '}
+          <Link href="/approvals">bandeja de aprobaciones</Link>
+          {failure.approvalRequestId !== null ? ` (solicitud #${failure.approvalRequestId})` : ''}.
+        </p>
+      </Alert>
+    );
+  }
+  if (failure.status === 409) {
+    return (
+      <Alert tone="warning" title={`No se pudo aplicar «${failure.transitionName}»`} action={dismiss}>
+        <p>{failure.message}</p>
+        <p className="text-sm" style={{ marginTop: 4 }}>
+          El ticket se recargó con su estado actual; verifique las acciones disponibles.
+        </p>
+      </Alert>
+    );
+  }
+  return (
+    <Alert tone="error" action={dismiss}>
+      {failure.message}
+    </Alert>
   );
 }

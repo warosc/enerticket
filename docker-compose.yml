@@ -1,4 +1,5 @@
-# Energuate Service Desk — Fase 2
+# Energuate Service Desk — entorno LOCAL / LABORATORIO
+# (producción: docker-compose.prod.yml, ver docs/DEPLOYMENT.md)
 #
 # Uso:  cp .env.example .env   (editar TODOS los valores replace-...)
 #       docker compose up -d --build
@@ -17,15 +18,23 @@ x-common: &common
 
 # Entorno compartido por api, worker y beat (misma imagen del backend).
 x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
   DATABASE_URL: postgresql+psycopg://servicedesk:${DB_PASSWORD:?Defina DB_PASSWORD en .env}@db:5432/servicedesk
   REDIS_URL: redis://redis:6379/0
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  UVICORN_WORKERS: ${UVICORN_WORKERS:-1}
+  FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+  CELERY_BEAT_SCHEDULE_FILE: ${CELERY_BEAT_SCHEDULE_FILE:-/tmp/celerybeat-schedule}
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
   AUTH_MODE: ${AUTH_MODE:-oidc}
   OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:8081/realms/energuate}
   OIDC_JWKS_URL: ${OIDC_JWKS_URL:-http://keycloak:8080/realms/energuate/protocol/openid-connect/certs}
   OIDC_AUDIENCE: ${OIDC_AUDIENCE:-servicedesk-api}
   SEED_DEMO: ${SEED_DEMO:-false}
+  SEED_FLOWS_EXAMPLES: ${SEED_FLOWS_EXAMPLES:-true}
+  APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:3000}
+  API_DOCS: ${API_DOCS:-}
+  OIDC_MISSING_GROUPS_AS_EMPTY: ${OIDC_MISSING_GROUPS_AS_EMPTY:-true}
   SEED_TEAM_GROUPS: ${SEED_TEAM_GROUPS:-Telecomunicaciones:GG-SD-Telecomunicaciones,Seguridad de Redes:GG-SD-SeguridadRedes,Ciberseguridad / SOC:GG-SD-SOC,Riesgo y Cumplimiento:GG-SD-Riesgo,Proyectos TI:GG-SD-ProyectosTI,General:GG-SD-General}
   TZ_BUSINESS: ${TZ_BUSINESS:-America/Guatemala}
   S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
@@ -35,6 +44,17 @@ x-backend-env: &backend-env
   S3_BUCKET: ${S3_BUCKET:-servicedesk-attachments}
   S3_REGION: ${S3_REGION:-us-east-1}
   MAX_ATTACHMENT_MB: ${MAX_ATTACHMENT_MB:-20}
+  ATTACHMENT_PURGE_DAYS: ${ATTACHMENT_PURGE_DAYS:-30}
+  # Anti-abuso (ver docs/SECURITY.md).
+  REQUESTER_MAX_PRIORITY: ${REQUESTER_MAX_PRIORITY-high}
+  TICKETS_PER_USER_HOUR: ${TICKETS_PER_USER_HOUR:-30}
+  ATTACHMENT_USER_DAILY_MB: ${ATTACHMENT_USER_DAILY_MB:-500}
+  ATTACHMENT_USER_DAILY_COUNT: ${ATTACHMENT_USER_DAILY_COUNT:-100}
+  ACCOUNT_STALE_DAYS: ${ACCOUNT_STALE_DAYS:-45}
+  OIDC_JWKS_MIN_REFRESH_SECONDS: ${OIDC_JWKS_MIN_REFRESH_SECONDS:-60}
+  WS_MAX_CONNECTIONS_PER_USER: ${WS_MAX_CONNECTIONS_PER_USER:-8}
+  WS_CLIENT_MESSAGES_PER_MINUTE: ${WS_CLIENT_MESSAGES_PER_MINUTE:-60}
+  WS_MAX_MESSAGE_BYTES: ${WS_MAX_MESSAGE_BYTES:-16384}
   SMTP_HOST: ${SMTP_HOST:-}
   SMTP_PORT: ${SMTP_PORT:-587}
   SMTP_USER: ${SMTP_USER:-}
@@ -132,7 +152,9 @@ services:
       KC_REALM: energuate
       KC_ADMIN: ${KC_ADMIN:-admin}
       KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?Defina KC_ADMIN_PASSWORD en .env}
-      KC_GROUP_ROLE_MAP: ${KC_GROUP_ROLE_MAP:-}
+      KC_GROUP_ROLE_MAP: ${KC_GROUP_ROLE_MAP:-GG-SD-Admins:admin,GG-SD-Agentes:agent,GG-SD-Aprobadores:approver}
+      KC_WEB_URLS: ${KC_WEB_URLS:-http://localhost:3000}
+      SEED_TEAM_GROUPS: ${SEED_TEAM_GROUPS:-Telecomunicaciones:GG-SD-Telecomunicaciones,Seguridad de Redes:GG-SD-SeguridadRedes,Ciberseguridad / SOC:GG-SD-SOC,Riesgo y Cumplimiento:GG-SD-Riesgo,Proyectos TI:GG-SD-ProyectosTI,General:GG-SD-General}
       KC_LAB_USERS: ${KC_LAB_USERS:-false}
       KC_LAB_PASSWORD: ${KC_LAB_PASSWORD:-}
       LDAP_URL: ${LDAP_URL:-}
@@ -171,7 +193,7 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Defina MINIO_ROOT_PASSWORD en .env}
       MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
     volumes: [minio_data:/data]
-    # 9000 = API S3 (descargas con URL prefirmada desde el navegador), 9001 = consola.
+    # 9000 = API S3 (diagnóstico local; la API hace de proxy de los adjuntos), 9001 = consola.
     ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9000/minio/health/live || exit 1"]
@@ -250,7 +272,7 @@ services:
     <<: *common
     build: ./backend
     image: energuate-service-desk/backend:local
-    command: ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=INFO"]
+    command: ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=${CELERY_LOG_LEVEL:-info}"]
     environment:
       <<: *backend-env
     depends_on:
@@ -262,22 +284,24 @@ services:
     <<: *common
     build: ./backend
     image: energuate-service-desk/backend:local
-    command: ["celery", "-A", "app.tasks.celery_app", "beat", "--loglevel=INFO"]
+    command: ["celery", "-A", "app.tasks.celery_app", "beat", "--loglevel=${CELERY_LOG_LEVEL:-info}"]
     environment:
       <<: *backend-env
-      CELERY_BEAT_SCHEDULE_FILE: /tmp/celerybeat-schedule
     depends_on:
       redis: {condition: service_healthy}
       api: {condition: service_healthy}
 
   web:
     <<: *common
+    init: true
     image: energuate-service-desk/web:local
     build:
       context: ./frontend
       # NEXT_PUBLIC_* se incrustan en el bundle en tiempo de build.
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-}
+        NEXT_PUBLIC_CSP_EXTRA_SOURCES: ${NEXT_PUBLIC_CSP_EXTRA_SOURCES:-}
         NEXT_PUBLIC_AUTH_MODE: ${NEXT_PUBLIC_AUTH_MODE:-oidc}
         NEXT_PUBLIC_KEYCLOAK_URL: ${NEXT_PUBLIC_KEYCLOAK_URL:-http://localhost:8081}
         NEXT_PUBLIC_KEYCLOAK_REALM: ${NEXT_PUBLIC_KEYCLOAK_REALM:-energuate}
@@ -286,7 +310,7 @@ services:
     depends_on:
       api: {condition: service_healthy}
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/ || exit 1"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 10

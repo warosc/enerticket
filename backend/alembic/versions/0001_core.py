@@ -172,7 +172,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["user_id"], ["users.id"], name="fk_team_members_user_id_users", ondelete="CASCADE"
         ),
-        sa.CheckConstraint("role IN ('member', 'lead')", name="ck_team_members_role_valid"),
+        sa.CheckConstraint("role IN ('member', 'lead')", name=op.f("ck_team_members_role_valid")),
     )
 
     op.create_table(
@@ -235,7 +235,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "category IN ('todo', 'in_progress', 'waiting', 'done')",
-            name="ck_workflow_states_category_valid",
+            name=op.f("ck_workflow_states_category_valid"),
         ),
     )
     op.create_index("ix_workflow_states_workflow_id", "workflow_states", ["workflow_id"])
@@ -318,7 +318,7 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["author_id"], ["users.id"], name="fk_ticket_comments_author_id_users"),
         sa.CheckConstraint(
-            "visibility IN ('public', 'internal')", name="ck_ticket_comments_visibility_valid"
+            "visibility IN ('public', 'internal')", name=op.f("ck_ticket_comments_visibility_valid")
         ),
     )
     op.create_index("ix_ticket_comments_ticket_id", "ticket_comments", ["ticket_id"])

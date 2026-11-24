@@ -1,9 +1,11 @@
 <!doctype html>
 <html lang="es">
-  <head><meta charset="utf-8" /><title>Verificación de sesión</title></head>
-  <body>
-    <script>
-      parent.postMessage(location.href, location.origin);
-    </script>
-  </body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex" />
+    <title>Verificación de sesión</title>
+    <!-- Script externo (no en línea) para cumplir la Content-Security-Policy (script-src 'self'). -->
+    <script src="/silent-check-sso.js"></script>
+  </head>
+  <body></body>
 </html>

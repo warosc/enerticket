@@ -1,5 +1,13 @@
-# Scripts y Dockerfiles siempre con LF (se ejecutan dentro de contenedores Linux)
+# Archivos que se montan o ejecutan dentro de contenedores Linux: siempre LF,
+# también en clones de Windows (core.autocrlf=true).
+* text=auto
 *.sh text eol=lf
 Dockerfile text eol=lf
-*.Dockerfile text eol=lf
-Dockerfile.* text eol=lf
+Caddyfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+.env.example text eol=lf
+.env.production.example text eol=lf
+*.png binary
+*.ico binary

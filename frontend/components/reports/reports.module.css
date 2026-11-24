@@ -1,0 +1,112 @@
+/*
+ * Estilos del módulo de reportes. Reutiliza los tokens de app/globals.css.
+ * Paleta de series validada (CVD/contraste) para superficie blanca:
+ *   categórica: azul corporativo, naranja, aqua (aqua < 3:1 → siempre hay vista de tabla);
+ *   ordinal (prioridad): un solo tono azul de claro a oscuro.
+ */
+.root {
+  --series-1: var(--chart-series-1, #1559a3);
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --ordinal-1: #86b6ef;
+  --ordinal-2: #3987e5;
+  --ordinal-3: #1c5cab;
+  --ordinal-4: #0d366b;
+  --status-good: #0ca30c;
+  --status-critical: #d03b3b;
+  --status-warning: #fab219;
+}
+
+/* ---------- Filtros ---------- */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+.filters :global(.field) { min-width: 140px; flex: 1 1 140px; }
+.presets { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.presetActive { border-color: var(--color-primary); color: var(--color-primary); background: var(--color-primary-soft); }
+
+/* ---------- KPIs ---------- */
+.kpiGrid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+.delta { font-size: var(--text-xs); font-weight: 600; font-variant-numeric: tabular-nums; }
+.deltaGood { color: var(--color-success); }
+.deltaBad { color: var(--color-danger); }
+.deltaFlat { color: var(--color-text-subtle); }
+
+/* ---------- Gráficos ---------- */
+.chartsGrid {
+  display: grid;
+  gap: var(--space-5);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.span2 { grid-column: 1 / -1; }
+.chartTall { width: 100%; height: 320px; }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-2);
+}
+.legendItem { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+.swatchLine { width: 14px; height: 2px; border-radius: 1px; flex-shrink: 0; }
+
+.tooltip {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: 8px 12px;
+  font-size: var(--text-sm);
+  min-width: 150px;
+}
+.tooltipTitle { font-weight: 600; margin-bottom: 4px; color: var(--color-text); }
+.tooltipRow { display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); }
+.tooltipValue { margin-left: auto; color: var(--color-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---------- Barras en tabla (carga por agente) ---------- */
+.meter {
+  position: relative;
+  height: 8px;
+  min-width: 80px;
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.meterFill { position: absolute; inset: 0 auto 0 0; border-radius: var(--radius-pill); background: var(--series-1); }
+
+/* ---------- SLA ---------- */
+.slaGrid { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.slaCard {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--color-surface-alt);
+}
+.slaValue { font-size: var(--text-3xl); font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stackBar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: var(--color-surface-sunken);
+}
+.stackSeg { height: 100%; }
+.statusDot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+
+@media (max-width: 900px) {
+  .chartsGrid { grid-template-columns: minmax(0, 1fr); }
+}

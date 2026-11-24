@@ -80,3 +80,39 @@ def test_history_hides_internal_comment_events(client, agent, requester, create_
     assert [h["event_type"] for h in requester_history] == ["ticket.created", "ticket.commented"]
     assert requester_history[1]["after"]["visibility"] == "public"
     assert requester_history[1]["actor"]["id"] == agent.id
+
+
+def test_internal_notes_require_working_the_ticket(client, agent, other_agent, admin, create_ticket):
+    """Un agente que ve el ticket solo por ser su solicitante no lee notas internas de otra área."""
+    ticket = create_ticket(agent, department="Ciberseguridad / SOC", title="Correo sospechoso")
+    secret = "NOTA INTERNA: investigar a ana"
+    assert _comment(client, other_agent, ticket["id"], secret, "internal").status_code == 201
+    assert _comment(client, other_agent, ticket["id"], "Lo revisamos").status_code == 201
+
+    as_requester_agent = client.get(f"/tickets/{ticket['id']}/comments", headers=agent.headers)
+    assert as_requester_agent.status_code == 200
+    assert [c["body"] for c in as_requester_agent.json()] == ["Lo revisamos"]
+    history = client.get(f"/tickets/{ticket['id']}/history", headers=agent.headers).json()
+    assert all((h["after"] or {}).get("visibility") != "internal" for h in history)
+    # Tampoco puede escribir notas internas en un ticket que no atiende.
+    assert _comment(client, agent, ticket["id"], "Nota", "internal").status_code == 403
+
+    soc = client.get(f"/tickets/{ticket['id']}/comments", headers=other_agent.headers).json()
+    assert [c["body"] for c in soc] == [secret, "Lo revisamos"]
+    as_admin = client.get(f"/tickets/{ticket['id']}/comments", headers=admin.headers).json()
+    assert len(as_admin) == 2
+
+
+def test_assigned_agent_from_other_area_sees_internal_notes(
+    client, agent, other_agent, admin, requester, create_ticket
+):
+    ticket = create_ticket(requester, department="Ciberseguridad / SOC")
+    _comment(client, other_agent, ticket["id"], "Contexto interno", "internal")
+    before = client.get(f"/tickets/{ticket['id']}/comments", headers=agent.headers)
+    assert before.status_code == 404  # ni siquiera ve el ticket
+    patched = client.patch(
+        f"/tickets/{ticket['id']}", json={"assignee_id": agent.id}, headers=admin.headers
+    )
+    assert patched.status_code == 200, patched.text
+    after = client.get(f"/tickets/{ticket['id']}/comments", headers=agent.headers).json()
+    assert [c["body"] for c in after] == ["Contexto interno"]

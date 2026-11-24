@@ -1,0 +1,134 @@
+# Energuate Service Desk — proxy inverso de producción (Caddy 2)
+#
+# Variables (las inyecta docker-compose.prod.yml desde .env):
+#   APP_DOMAIN           dominio público único, p. ej. servicedesk.energuate.com
+#   TLS_MODE             acme | files | internal
+#                          acme     -> certificado automático (Let's Encrypt/ACME); requiere que
+#                                      APP_DOMAIN sea resoluble y accesible desde Internet (puerto 80/443)
+#                          files    -> certificado corporativo montado en /etc/caddy/certs
+#                                      (tls.crt = cadena completa, tls.key = clave privada)
+#                          internal -> CA interna de Caddy (solo pruebas / preproducción)
+#   ACME_EMAIL           correo de contacto ACME (TLS_MODE=acme)
+#   ADMIN_ALLOWED_CIDRS  redes autorizadas a la consola de Keycloak (separadas por espacio)
+#   MAX_REQUEST_BODY     tamaño máximo de petición hacia la API (p. ej. 30MB)
+#
+# Rutas:
+#   /api/*        -> api:8000 (sin el prefijo /api)
+#   /ws           -> api:8000 (WebSocket)
+#   /auth/*       -> keycloak:8080 (KC_HTTP_RELATIVE_PATH=/auth)
+#   resto         -> web:3000 (Next.js)
+#
+# MinIO NO se publica: la API sube y sirve los adjuntos (proxy con control de permisos).
+{
+	# Sin endpoint de administración remoto; los logs van a stdout en JSON.
+	admin localhost:2019
+	servers {
+		# Permite HTTP/1.1, HTTP/2 y HTTP/3.
+		protocols h1 h2 h3
+	}
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+}
+
+# --- Modos de certificado --------------------------------------------------------
+(tls_acme) {
+	tls {$ACME_EMAIL}
+}
+
+(tls_files) {
+	tls /etc/caddy/certs/tls.crt /etc/caddy/certs/tls.key {
+		protocols tls1.2 tls1.3
+	}
+}
+
+(tls_internal) {
+	tls internal
+}
+
+# --- Cabeceras de seguridad comunes ----------------------------------------------
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		# Valores por defecto: si el upstream (p. ej. Keycloak) ya los envía, se respetan.
+		?X-Frame-Options "SAMEORIGIN"
+		?Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss://{$APP_DOMAIN}; frame-src 'self'; frame-ancestors 'self'; form-action 'self'; base-uri 'self'; object-src 'none'"
+		-Server
+		-X-Powered-By
+	}
+}
+
+{$APP_DOMAIN} {
+	import tls_{$TLS_MODE}
+	import security_headers
+
+	encode zstd gzip
+
+	# Registro de accesos en JSON. Se ocultan el JWT del WebSocket (?token=) y
+	# los códigos OIDC (?code=); Authorization y Cookie ya se omiten por defecto.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					replace token REDACTED
+					replace code REDACTED
+					replace session_state REDACTED
+				}
+			}
+		}
+	}
+
+	# --- API REST (se elimina el prefijo /api) ---
+	handle_path /api/* {
+		request_body {
+			max_size {$MAX_REQUEST_BODY}
+		}
+		reverse_proxy api:8000 {
+			header_up X-Forwarded-Prefix /api
+		}
+	}
+
+	# --- WebSocket de tiempo real ---
+	handle /ws {
+		reverse_proxy api:8000 {
+			# Conexiones WebSocket de larga duración.
+			stream_timeout 24h
+			stream_close_delay 5s
+		}
+	}
+
+	# --- Keycloak ---
+	# Consola de administración y realm master: solo desde ADMIN_ALLOWED_CIDRS.
+	@kc_admin_denied {
+		path /auth/admin /auth/admin/* /auth/realms/master /auth/realms/master/*
+		not remote_ip {$ADMIN_ALLOWED_CIDRS}
+	}
+	handle @kc_admin_denied {
+		respond "Acceso denegado" 403
+	}
+	handle /auth/* {
+		reverse_proxy keycloak:8080
+	}
+	handle /auth {
+		redir /auth/ 308
+	}
+
+	# --- Portal web (Next.js) ---
+	handle {
+		reverse_proxy web:3000
+	}
+}
+
+# Healthcheck interno del contenedor (no publicado).
+http://:8088 {
+	respond /healthz "ok" 200
+	respond 404
+}

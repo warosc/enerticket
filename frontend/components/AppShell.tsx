@@ -8,11 +8,13 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth';
+import { resetRealtime, useRealtimeStatus } from '@/lib/realtime';
 import { initials, ROLE_LABELS } from '@/lib/format';
 import type { Role } from '@/lib/types';
 import DevLogin from './DevLogin';
 import { Icon, type IconName } from './icons';
 import NotificationBell from './NotificationBell';
+import RealtimeIndicator from './kanban/RealtimeIndicator';
 import { Alert, Spinner } from './ui';
 
 export interface NavItem {
@@ -109,7 +111,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
               Iniciar sesión de nuevo
             </button>
           ) : null}
-          <button type="button" className="btn btn-ghost" onClick={() => void auth.logout()}>
+          <button type="button" className="btn btn-ghost" onClick={() => {
+            // Cierra el WebSocket de inmediato (no esperar a que expire la identidad).
+            resetRealtime();
+            void auth.logout();
+          }}>
             {auth.mode === 'dev' ? 'Cambiar identidad' : 'Cerrar sesión'}
           </button>
         </div>
@@ -127,6 +133,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className={`app-shell${navOpen ? ' is-nav-open' : ''}`}>
+      <a href="#contenido" className="skip-link">
+        Saltar al contenido
+      </a>
       <aside className="app-sidebar" id="app-sidebar" aria-label="Navegación principal">
         <Link href="/" className="app-brand">
           <span className="app-brand-mark" aria-hidden="true">
@@ -139,7 +148,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </span>
         </Link>
 
-        <nav className="app-nav">
+        <nav className="app-nav" aria-label="Secciones">
           {visibleItems.map((item) => {
             const active = isActive(pathname, item.href);
             return (
@@ -170,7 +179,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
               </span>
             </span>
           </div>
-          <button type="button" className="btn btn-sm btn-logout" onClick={() => void auth.logout()}>
+          <button type="button" className="btn btn-sm btn-logout" onClick={() => {
+            // Cierra el WebSocket de inmediato (no esperar a que expire la identidad).
+            resetRealtime();
+            void auth.logout();
+          }}>
             <Icon name="logout" width={14} height={14} />
             {auth.mode === 'dev' ? 'Cambiar identidad' : 'Cerrar sesión'}
           </button>
@@ -200,12 +213,20 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <span className="app-topbar-title">{current?.label ?? 'Service Desk'}</span>
           <span className="spacer" />
           {auth.mode === 'dev' && <span className="app-env-tag">Laboratorio</span>}
+          <TopbarRealtime />
           <NotificationBell />
         </header>
-        <main className="app-content" id="contenido">
+        <main className="app-content" id="contenido" tabIndex={-1}>
           {children}
         </main>
       </div>
     </div>
   );
+}
+
+/** Indicador de tiempo real en la barra superior (oculto mientras no hay conexión en uso). */
+function TopbarRealtime() {
+  const realtime = useRealtimeStatus();
+  if (realtime.status === 'idle') return null;
+  return <RealtimeIndicator className="app-topbar-live" />;
 }

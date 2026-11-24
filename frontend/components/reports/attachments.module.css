@@ -1,0 +1,54 @@
+/* Estilos del panel de adjuntos del ticket (components/ticket/AttachmentsPanel.tsx). */
+.dropzone {
+  border: 2px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5) var(--space-4);
+  text-align: center;
+  background: var(--color-surface-alt);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.dropzone:hover, .dropzone:focus-visible { border-color: var(--color-primary); background: var(--color-primary-soft); outline: none; }
+.dropzoneActive { border-color: var(--color-primary); background: var(--color-primary-soft); color: var(--color-primary); }
+.dropzoneDisabled { cursor: not-allowed; opacity: 0.6; }
+.progress {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  overflow: hidden;
+}
+.progressFill { height: 100%; background: var(--color-primary); transition: width 0.15s linear; }
+.fileList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.fileItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+  min-width: 0;
+}
+.fileItem:last-child { border-bottom: 0; }
+.fileIcon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  text-transform: uppercase;
+}
+.fileMain { flex: 1; min-width: 0; }
+.fileName { font-weight: 600; font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fileMeta { font-size: var(--text-xs); color: var(--color-text-subtle); }
+.fileActions { display: flex; gap: var(--space-1); flex-shrink: 0; }
+
+@media (max-width: 560px) {
+  .fileItem { flex-wrap: wrap; }
+  .fileActions { width: 100%; justify-content: flex-end; }
+}

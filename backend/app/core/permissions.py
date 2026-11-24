@@ -3,6 +3,8 @@
 - admin: ve y edita todo.
 - agent: ve tickets de sus equipos o departamentos, asignados a él o creados por él;
   edita/transiciona los de su área (equipo, departamento) o asignados a él.
+- comentarios ``internal``: admin y agentes que atienden el ticket (misma regla que
+  editar); ver el ticket como solicitante o aprobador no da acceso a las notas internas.
 - requester: ve solo los propios; comenta y puede cerrar/reabrir los suyos.
 - Otros módulos amplían la visibilidad con ``register_visibility_extension``
   (p.ej. flows: aprobadores ven tickets con aprobaciones dirigidas a ellos).
@@ -134,16 +136,32 @@ def can_view_ticket(session: Session, principal: Principal, ticket: Ticket) -> b
     return _ticket_matches(session, principal, ticket.id)
 
 
-def can_edit_ticket(principal: Principal, ticket: Ticket) -> bool:
-    """¿Puede editar/transicionar libremente? admin todo; agent los de su área o asignados."""
+def can_edit_scope(
+    principal: Principal,
+    *,
+    department_id: int | None,
+    team_id: int | None,
+    assignee_id: int | None,
+) -> bool:
+    """Regla de edición sin BD: admin todo; agent su área (equipo/departamento) o asignado."""
     if principal.is_admin:
         return True
     if not principal.is_agent:
         return False
     return (
-        ticket.assignee_id == principal.user_id
-        or (ticket.team_id is not None and ticket.team_id in principal.team_ids)
-        or ticket.department_id in principal.department_ids
+        (assignee_id is not None and assignee_id == principal.user_id)
+        or (team_id is not None and team_id in principal.team_ids)
+        or (department_id is not None and department_id in principal.department_ids)
+    )
+
+
+def can_edit_ticket(principal: Principal, ticket: Ticket) -> bool:
+    """¿Puede editar/transicionar libremente? admin todo; agent los de su área o asignados."""
+    return can_edit_scope(
+        principal,
+        department_id=ticket.department_id,
+        team_id=ticket.team_id,
+        assignee_id=ticket.assignee_id,
     )
 
 
@@ -158,6 +176,31 @@ def can_requester_transition(
     return closing or reopening
 
 
-def can_view_internal_comments(principal: Principal) -> bool:
-    """Los comentarios ``internal`` solo son visibles para agent/admin."""
-    return principal.is_agent
+def can_view_internal_scope(
+    principal: Principal,
+    *,
+    department_id: int | None,
+    team_id: int | None,
+    assignee_id: int | None,
+) -> bool:
+    """Notas internas sin BD (para eventos): admin, o agente del área del ticket o asignado.
+
+    Ver el ticket no basta: un agente que lo ve solo por ser su solicitante o por una
+    aprobación (extensión de visibilidad) no lee las notas internas de otra área.
+    """
+    return can_edit_scope(
+        principal, department_id=department_id, team_id=team_id, assignee_id=assignee_id
+    )
+
+
+def can_view_internal_comments(principal: Principal, ticket: Ticket | None = None) -> bool:
+    """¿Puede leer/crear comentarios ``internal`` de este ticket?
+
+    admin siempre; agent solo si atiende el ticket (``can_edit_ticket``: equipo o
+    departamento del ticket, o asignado). Sin ticket solo admin (regla conservadora).
+    """
+    if principal.is_admin:
+        return True
+    if ticket is None or not principal.is_agent:
+        return False
+    return can_edit_ticket(principal, ticket)

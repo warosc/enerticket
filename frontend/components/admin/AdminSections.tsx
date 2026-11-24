@@ -631,6 +631,10 @@ export function ProjectsSection() {
   const teamsRes = useApiResource<Team[]>('/admin/teams');
   const teams = useMemo(() => [...(teamsRes.data ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'es')), [teamsRes.data]);
   const projects = useMemo(() => [...(projectsRes.data ?? [])].sort((a, b) => a.code.localeCompare(b.code, 'es')), [projectsRes.data]);
+  // Para mostrar el nombre del responsable (solo usuarios que ya iniciaron sesión alguna vez).
+  const usersQuery = useMemo(() => ({ limit: 200, include_inactive: true }), []);
+  const usersRes = useApiResource<UserOut[]>('/users', usersQuery);
+  const userById = useMemo(() => new Map((usersRes.data ?? []).map((u) => [u.id, u])), [usersRes.data]);
   const mutation = useMutation();
   const [form, setForm] = useState<ProjectForm>(EMPTY_PROJECT);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -645,7 +649,14 @@ export function ProjectsSection() {
       name: project.name,
       team_id: project.team_id ?? '',
       owner: project.owner_id
-        ? { id: project.owner_id, display_name: `Usuario #${project.owner_id}`, username: '', email: null, roles: [], active: true }
+        ? (userById.get(project.owner_id) ?? {
+            id: project.owner_id,
+            display_name: `Usuario #${project.owner_id}`,
+            username: '',
+            email: null,
+            roles: [],
+            active: true,
+          })
         : null,
     });
   }
@@ -759,6 +770,7 @@ export function ProjectsSection() {
                   <th scope="col">Código</th>
                   <th scope="col">Nombre</th>
                   <th scope="col">Equipo</th>
+                  <th scope="col">Responsable</th>
                   <th scope="col" className="text-right">
                     Acciones
                   </th>
@@ -770,6 +782,13 @@ export function ProjectsSection() {
                     <td className="col-key">{p.code}</td>
                     <td className="strong">{p.name}</td>
                     <td>{teamName(p.team_id)}</td>
+                    <td>
+                      {p.owner_id === null ? (
+                        <span className="subtle">—</span>
+                      ) : (
+                        (userById.get(p.owner_id)?.display_name ?? `Usuario #${p.owner_id}`)
+                      )}
+                    </td>
                     <td className="text-right">
                       <button type="button" className="btn btn-sm" onClick={() => startEdit(p)}>
                         Editar

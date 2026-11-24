@@ -17,11 +17,15 @@ import os
 os.environ.update(
     {
         "AUTH_MODE": "dev",
-        "DATABASE_URL": "sqlite://",
+        # TEST_DATABASE_URL permite correr la suite contra PostgreSQL (job de CI).
+        "DATABASE_URL": os.environ.get("TEST_DATABASE_URL", "sqlite://"),
         "SEED_DEMO": "false",
         "EVENTS_RAISE_ERRORS": "true",
         "REDIS_URL": "redis://127.0.0.1:1/0",
         "LOG_LEVEL": "WARNING",
+        # Límites anti-abuso desactivados por defecto en las pruebas (tienen pruebas propias).
+        "REQUESTER_MAX_PRIORITY": "",
+        "TICKETS_PER_USER_HOUR": "0",
     }
 )
 

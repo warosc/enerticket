@@ -7,12 +7,15 @@ Las funciones no hacen commit: el llamador decide cuándo confirmar la transacci
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import timedelta
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.accounts import is_stale
+from app.core.config import settings
 from app.core.db import utcnow
 from app.core.events import collect_enrichments, emit, run_guards
 from app.core.permissions import (
@@ -61,7 +64,7 @@ def _not_found() -> HTTPException:
 
 
 def _unprocessable(detail: str) -> HTTPException:
-    return HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
+    return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
 
 
 # --------------------------------------------------------------------------- serialización
@@ -213,6 +216,11 @@ def _validate_assignee(session: Session, user_id: int) -> User:
     user = session.get(User, user_id)
     if user is None or not user.active:
         raise _unprocessable("El usuario asignado no existe o está inactivo")
+    if is_stale(user):
+        raise _unprocessable(
+            f"{user.display_name} no ha iniciado sesión en los últimos {settings.account_stale_days} "
+            "días; sus permisos no están verificados. Elija otro agente."
+        )
     roles = set(user.roles or [])
     if not roles.intersection({ROLE_AGENT, ROLE_ADMIN}):
         raise _unprocessable("El usuario asignado debe tener rol de agente")
@@ -231,6 +239,34 @@ def _validate_team(session: Session, team_id: int, department_id: int) -> Team:
 # --------------------------------------------------------------------------- operaciones
 
 
+def _check_requester_limits(session: Session, principal: Principal, priority: Priority) -> None:
+    """Límites para quien no es agente: prioridad máxima y tickets por hora (429)."""
+    if principal.is_agent:
+        return
+    max_key = (settings.requester_max_priority or "").strip()
+    if max_key:
+        max_priority = session.scalar(select(Priority).where(Priority.key == max_key))
+        if max_priority is not None and priority.rank > max_priority.rank:
+            raise _unprocessable(
+                f"Solo los agentes pueden registrar tickets con prioridad «{priority.name}». "
+                f"Elija «{max_priority.name}» o inferior; el equipo la escalará si corresponde."
+            )
+    limit = settings.tickets_per_user_hour
+    if limit:
+        since = utcnow() - timedelta(hours=1)
+        recent = session.scalar(
+            select(func.count())
+            .select_from(Ticket)
+            .where(Ticket.requester_id == principal.user_id, Ticket.created_at >= since)
+        )
+        if (recent or 0) >= limit:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Alcanzó el máximo de {limit} tickets por hora. Intente más tarde.",
+                headers={"Retry-After": "600"},
+            )
+
+
 def create_ticket(
     session: Session,
     principal: Principal,
@@ -241,12 +277,19 @@ def create_ticket(
     priority_key: str = "medium",
     department_id: int,
     project_id: int | None = None,
+    enforce_limits: bool = True,
 ) -> Ticket:
-    """Crea un ticket en el estado inicial del flujo por defecto y emite ``ticket.created``."""
+    """Crea un ticket en el estado inicial del flujo por defecto y emite ``ticket.created``.
+
+    Quien no es agente está limitado por ``REQUESTER_MAX_PRIORITY`` (422) y
+    ``TICKETS_PER_USER_HOUR`` (429); ``enforce_limits=False`` solo para seeds/procesos internos.
+    """
     ticket_type = session.scalar(select(TicketType).where(TicketType.key == type_key))
     if ticket_type is None:
         raise _unprocessable(f"Tipo de ticket desconocido: {type_key}")
     priority = _priority_by_key(session, priority_key)
+    if enforce_limits:
+        _check_requester_limits(session, principal, priority)
     department = session.get(Department, department_id)
     if department is None:
         raise _unprocessable("El departamento no existe")
@@ -379,6 +422,19 @@ def find_transition(
     return to_state, transition
 
 
+def counts_as_first_response(principal: Principal, ticket: Ticket) -> bool:
+    """¿La acción de ``principal`` cuenta como primera respuesta (SLA)?
+
+    Solo la de un agente humano distinto del solicitante: las automatizaciones (usuario
+    técnico) no cumplen la primera respuesta aunque comenten o transicionen.
+    """
+    return (
+        principal.is_agent
+        and not principal.is_system
+        and principal.user_id != ticket.requester_id
+    )
+
+
 def transition_ticket(
     session: Session,
     principal: Principal,
@@ -439,7 +495,7 @@ def transition_ticket(
     if (
         ticket.first_response_at is None
         and from_state.is_initial
-        and principal.is_agent
+        and counts_as_first_response(principal, ticket)
     ):
         ticket.first_response_at = now
     ticket.updated_at = now
@@ -476,9 +532,10 @@ def add_comment(
     """Agrega un comentario. Solo agent/admin pueden crear comentarios ``internal``."""
     if visibility not in ("public", "internal"):
         raise _unprocessable("Visibilidad inválida")
-    if visibility == "internal" and not can_view_internal_comments(principal):
+    if visibility == "internal" and not can_view_internal_comments(principal, ticket):
         raise HTTPException(
-            status.HTTP_403_FORBIDDEN, detail="Solo agentes pueden crear comentarios internos"
+            status.HTTP_403_FORBIDDEN,
+            detail="Solo los agentes que atienden el ticket pueden crear comentarios internos",
         )
     now = utcnow()
     comment = TicketComment(
@@ -492,8 +549,7 @@ def add_comment(
     if (
         visibility == "public"
         and ticket.first_response_at is None
-        and principal.is_agent
-        and principal.user_id != ticket.requester_id
+        and counts_as_first_response(principal, ticket)
     ):
         ticket.first_response_at = now
     ticket.updated_at = now
@@ -530,7 +586,7 @@ def list_comments(session: Session, principal: Principal, ticket: Ticket) -> lis
         .where(TicketComment.ticket_id == ticket.id)
         .order_by(TicketComment.created_at, TicketComment.id)
     )
-    if not can_view_internal_comments(principal):
+    if not can_view_internal_comments(principal, ticket):
         stmt = stmt.where(TicketComment.visibility == "public")
     return [serialize_comment(c) for c in session.scalars(stmt).all()]
 
@@ -550,7 +606,7 @@ def list_history(session: Session, principal: Principal, ticket: Ticket) -> list
         .where(TicketHistory.ticket_id == ticket.id)
         .order_by(TicketHistory.timestamp, TicketHistory.id)
     ).all()
-    show_internal = can_view_internal_comments(principal)
+    show_internal = can_view_internal_comments(principal, ticket)
     return [
         {
             "id": entry.id,

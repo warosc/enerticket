@@ -1,4 +1,10 @@
+# Secretos: nunca subir archivos .env reales (solo las plantillas).
 .env
+.env.*
+!.env.example
+!.env.production.example
+
+# Dependencias y artefactos
 node_modules/
 .next/
 __pycache__/
@@ -6,3 +12,8 @@ __pycache__/
 *.db
 .venv/
 .pytest_cache/
+frontend/tsconfig.tsbuildinfo
+
+# Copias de seguridad y certificados locales
+backups/
+*.dump

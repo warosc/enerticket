@@ -6,50 +6,27 @@ import CountBarChart, { type CountDatum } from '@/components/dashboard/CountBarC
 import { Icon } from '@/components/icons';
 import SlaBadge from '@/components/ticket/SlaBadge';
 import { EmptyState, ErrorAlert, Loading, PageHeader, PriorityBadge, StatusBadge } from '@/components/ui';
-import { ApiError, apiFetch, errorMessage } from '@/lib/api';
+import { apiFetch, errorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatNumber, formatRelative } from '@/lib/format';
 import { useCatalog } from '@/lib/hooks';
 import { useTicketEvents } from '@/lib/realtime';
-import type { Catalog, TicketOut, TicketPage, TicketStats } from '@/lib/types';
+import type { TicketOut, TicketPage, TicketStats } from '@/lib/types';
 
 interface DashboardData {
   stats: TicketStats;
   criticalOpen: number;
   mine: number;
   assignedToMe: number | null;
+  unassigned: number | null;
   recent: TicketOut[];
 }
+
+const OPEN_CATEGORIES = 'todo,in_progress,waiting';
 
 async function countTickets(query: Record<string, string | number | boolean>): Promise<number> {
   const page = await apiFetch<TicketPage>('/tickets', { query: { ...query, page: 1, page_size: 1 } });
   return page.total;
-}
-
-/** Usa /stats si existe; si no, cuenta con /tickets por estado y prioridad. */
-async function loadStats(catalog: Catalog): Promise<TicketStats> {
-  try {
-    return await apiFetch<TicketStats>('/stats');
-  } catch (e) {
-    if (!(e instanceof ApiError) || e.status !== 404) throw e;
-  }
-  const states = catalog.workflow.states;
-  const [total, stateCounts, priorityCounts] = await Promise.all([
-    countTickets({}),
-    Promise.all(states.map((s) => countTickets({ status: s.key }))),
-    Promise.all(catalog.priorities.map((p) => countTickets({ priority: p.key }))),
-  ]);
-  const by_status: Record<string, number> = {};
-  const by_category: TicketStats['by_category'] = {};
-  states.forEach((s, i) => {
-    by_status[s.key] = stateCounts[i];
-    by_category[s.category] = (by_category[s.category] ?? 0) + stateCounts[i];
-  });
-  const by_priority: Record<string, number> = {};
-  catalog.priorities.forEach((p, i) => {
-    by_priority[p.key] = priorityCounts[i];
-  });
-  return { total, by_status, by_priority, by_category };
 }
 
 export default function DashboardPage() {
@@ -60,27 +37,22 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const requestId = useRef(0);
 
-  const openStateKeys = useMemo(
-    () => (catalog ? catalog.workflow.states.filter((s) => s.category !== 'done').map((s) => s.key) : []),
-    [catalog],
-  );
-
   const load = useCallback(
     async (silent = false) => {
-      if (!catalog || !user) return;
+      if (!user) return;
       const id = ++requestId.current;
       if (!silent) setLoading(true);
       try {
-        const openKeys = openStateKeys.join(',');
-        const [stats, criticalOpen, mine, assignedToMe, recent] = await Promise.all([
-          loadStats(catalog),
-          countTickets({ priority: 'critical', status: openKeys }),
-          countTickets({ mine: true, status: openKeys }),
-          isAgent ? countTickets({ assignee_id: user.id, status: openKeys }) : Promise.resolve(null),
+        const [stats, criticalOpen, mine, assignedToMe, unassigned, recent] = await Promise.all([
+          apiFetch<TicketStats>('/stats'),
+          countTickets({ priority: 'critical', category: OPEN_CATEGORIES }),
+          countTickets({ mine: true, category: OPEN_CATEGORIES }),
+          isAgent ? countTickets({ assignee_id: user.id, category: OPEN_CATEGORIES }) : Promise.resolve(null),
+          isAgent ? countTickets({ unassigned: true, category: OPEN_CATEGORIES }) : Promise.resolve(null),
           apiFetch<TicketPage>('/tickets', { query: { page: 1, page_size: 8, sort: '-updated_at' } }),
         ]);
         if (id !== requestId.current) return;
-        setData({ stats, criticalOpen, mine, assignedToMe, recent: recent.items });
+        setData({ stats, criticalOpen, mine, assignedToMe, unassigned, recent: recent.items });
         setError(null);
       } catch (e) {
         if (id === requestId.current) setError(`No se pudieron cargar los indicadores: ${errorMessage(e)}`);
@@ -88,7 +60,7 @@ export default function DashboardPage() {
         if (id === requestId.current) setLoading(false);
       }
     },
-    [catalog, user, isAgent, openStateKeys],
+    [user, isAgent],
   );
 
   useEffect(() => {
@@ -109,14 +81,20 @@ export default function DashboardPage() {
   );
 
   const stateData: CountDatum[] = useMemo(() => {
-    if (!catalog || !data) return [];
+    if (!data) return [];
+    if (!catalog) {
+      return Object.entries(data.stats.by_status).map(([key, count]) => ({ key, label: key, count }));
+    }
     return [...catalog.workflow.states]
       .sort((a, b) => a.order - b.order)
       .map((s) => ({ key: s.key, label: s.name, count: data.stats.by_status[s.key] ?? 0 }));
   }, [catalog, data]);
 
   const priorityData: CountDatum[] = useMemo(() => {
-    if (!catalog || !data) return [];
+    if (!data) return [];
+    if (!catalog) {
+      return Object.entries(data.stats.by_priority).map(([key, count]) => ({ key, label: key, count }));
+    }
     return [...catalog.priorities]
       .sort((a, b) => a.rank - b.rank)
       .map((p) => ({ key: p.key, label: p.name, count: data.stats.by_priority[p.key] ?? 0 }));
@@ -152,15 +130,30 @@ export default function DashboardPage() {
       ) : data ? (
         <>
           <section className="grid-auto" aria-label="Indicadores clave">
-            <Kpi label="Tickets visibles" value={data.stats.total} accent="primary" />
-            <Kpi label="Abiertos" value={openCount} accent="neutral" sub="Por atender, en curso y en espera" />
-            <Kpi label="En espera" value={byCategory.waiting ?? 0} accent="warning" />
-            <Kpi label="Críticos abiertos" value={data.criticalOpen} accent="danger" />
-            <Kpi label="Finalizados" value={byCategory.done ?? 0} accent="success" sub="Resueltos y cerrados" />
+            <Kpi label="Tickets visibles" value={data.stats.total} accent="primary" href="/tickets" />
+            <Kpi
+              label="Abiertos"
+              value={openCount}
+              accent="neutral"
+              sub="Por atender, en curso y en espera"
+              href={`/tickets?category=${OPEN_CATEGORIES}`}
+            />
+            <Kpi label="En espera" value={byCategory.waiting ?? 0} accent="warning" href="/tickets?category=waiting" />
+            <Kpi label="Críticos abiertos" value={data.criticalOpen} accent="danger" href={`/tickets?priority=critical&category=${OPEN_CATEGORIES}`} />
+            <Kpi
+              label="Finalizados"
+              value={byCategory.done ?? 0}
+              accent="success"
+              sub="Resueltos y cerrados"
+              href="/tickets?category=done"
+            />
             {data.assignedToMe !== null ? (
-              <Kpi label="Asignados a mí" value={data.assignedToMe} accent="primary" sub="Abiertos" />
+              <Kpi label="Asignados a mí" value={data.assignedToMe} accent="primary" sub="Abiertos" href="/tickets?scope=assigned" />
             ) : (
-              <Kpi label="Mis tickets abiertos" value={data.mine} accent="primary" />
+              <Kpi label="Mis tickets abiertos" value={data.mine} accent="primary" href="/tickets?scope=mine" />
+            )}
+            {data.unassigned !== null && (
+              <Kpi label="Sin asignar" value={data.unassigned} accent="warning" sub="Abiertos" href="/tickets?scope=unassigned" />
             )}
           </section>
 
@@ -230,17 +223,27 @@ function Kpi({
   value,
   sub,
   accent,
+  href,
 }: {
   label: string;
   value: number;
   sub?: string;
   accent: 'primary' | 'warning' | 'success' | 'danger' | 'neutral';
+  href?: string;
 }) {
-  return (
-    <div className={`kpi kpi-accent-${accent}`}>
+  const content = (
+    <>
       <span className="kpi-label">{label}</span>
       <span className="kpi-value">{formatNumber(value)}</span>
       {sub && <span className="kpi-sub">{sub}</span>}
-    </div>
+    </>
   );
+  if (href) {
+    return (
+      <Link href={href} className={`kpi kpi-link kpi-accent-${accent}`} aria-label={`${label}: ${formatNumber(value)}. Ver tickets`}>
+        {content}
+      </Link>
+    );
+  }
+  return <div className={`kpi kpi-accent-${accent}`}>{content}</div>;
 }

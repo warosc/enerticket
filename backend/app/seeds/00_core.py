@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.seed_state import get_seed_state, mark_seed_applied
 from app.models.core import (
     Department,
     Priority,
@@ -81,7 +82,18 @@ TRANSITIONS = (
 )
 
 
+SEED_KEY_DEPARTMENTS = "core.departments.v1"
+
+
 def _seed_departments_and_teams(session: Session) -> None:
+    """Departamentos y equipos iniciales: una sola vez (el administrador puede renombrarlos
+    o borrarlos sin que vuelvan a aparecer en el siguiente arranque)."""
+    if get_seed_state(session, SEED_KEY_DEPARTMENTS) is not None:
+        return
+    if session.scalar(select(Department.id).limit(1)) is not None:
+        # Base creada antes de existir seed_state: no se toca lo que haya.
+        mark_seed_applied(session, SEED_KEY_DEPARTMENTS, {"adopted": True})
+        return
     groups = settings.team_group_map
     for name in DEPARTMENTS:
         department = session.scalar(select(Department).where(Department.name == name))
@@ -99,6 +111,7 @@ def _seed_departments_and_teams(session: Session) -> None:
         elif team.external_group is None and group:
             team.external_group = group
     session.flush()
+    mark_seed_applied(session, SEED_KEY_DEPARTMENTS)
 
 
 def _seed_types_and_priorities(session: Session) -> None:

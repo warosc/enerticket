@@ -41,6 +41,8 @@ export default function AdminPage() {
             key={t.key}
             type="button"
             role="tab"
+            id={`admin-tab-${t.key}`}
+            aria-controls="admin-tabpanel"
             aria-selected={tab === t.key}
             className={`tab${tab === t.key ? ' is-active' : ''}`}
             onClick={() => setTab(t.key)}
@@ -49,7 +51,7 @@ export default function AdminPage() {
           </button>
         ))}
       </div>
-      <div role="tabpanel">
+      <div role="tabpanel" id="admin-tabpanel" aria-labelledby={`admin-tab-${tab}`}>
         {tab === 'departments' && <DepartmentsSection />}
         {tab === 'teams' && <TeamsSection />}
         {tab === 'members' && <MembersSection />}

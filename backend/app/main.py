@@ -42,10 +42,16 @@ def include_routers(app: FastAPI) -> list[str]:
 def create_app() -> FastAPI:
     configure_logging()
     load_plugins()
+    docs = settings.docs_enabled
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
         description="API del Service Desk corporativo de Energuate.",
+        # El proxy publica la API bajo API_ROOT_PATH (p.ej. /api) y quita el prefijo.
+        root_path=settings.api_root_path,
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+        openapi_url="/openapi.json" if docs else None,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -53,6 +59,8 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Necesarias para que el navegador lea el nombre del adjunto descargado y su checksum.
+        expose_headers=["Content-Disposition", "X-Checksum-SHA256"],
     )
 
     @app.exception_handler(IntegrityError)
@@ -65,6 +73,10 @@ def create_app() -> FastAPI:
 
     routers = include_routers(app)
     logger.info("Routers cargados: %s", ", ".join(routers))
+    logger.info(
+        "Entorno=%s auth=%s docs=%s root_path=%r",
+        settings.environment, settings.auth_mode, docs, settings.api_root_path,
+    )
     if settings.auth_mode == "dev":
         logger.warning("AUTH_MODE=dev: autenticación de laboratorio por headers. No usar en producción.")
     return app

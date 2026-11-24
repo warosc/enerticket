@@ -1,0 +1,221 @@
+/* Estilos del módulo SLA. Usa los tokens de app/globals.css. */
+
+/* ---------- Barra de progreso ---------- */
+.progress {
+  position: relative;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  overflow: hidden;
+}
+.progressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-success);
+  transition: width 0.3s ease;
+}
+.tone-ok .progressFill { background: var(--color-success); }
+.tone-warning .progressFill { background: var(--color-warning); }
+.tone-breached .progressFill { background: var(--color-danger); }
+.tone-paused .progressFill {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--color-neutral),
+    var(--color-neutral) 6px,
+    var(--color-border-strong) 6px,
+    var(--color-border-strong) 12px
+  );
+}
+.tone-done .progressFill { background: var(--color-text-subtle); }
+.tone-cancelled .progressFill { background: var(--color-border-strong); }
+.progressMarker {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--color-text-subtle);
+  opacity: 0.6;
+}
+@media (prefers-reduced-motion: reduce) {
+  .progressFill { transition: none; }
+}
+
+/* ---------- Panel del ticket ---------- */
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.metric:last-of-type { border-bottom: 0; }
+.metricHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.metricTitle { font-weight: 600; font-size: var(--text-sm); }
+.metricMain {
+  font-size: var(--text-lg);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.metricMain.tone-breached { color: var(--color-danger); }
+.metricMain.tone-warning { color: var(--color-warning); }
+.metricMeta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.metricMeta dt { color: var(--color-text-subtle); }
+.metricMeta dd { margin: 0; color: var(--color-text); overflow-wrap: anywhere; }
+
+.history { font-size: var(--text-sm); }
+.history summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  padding: var(--space-2) 0;
+}
+.history summary:hover { color: var(--color-text); }
+.eventList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.eventItem {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+  font-size: var(--text-xs);
+}
+.eventDot {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--color-border-strong);
+}
+.eventDot.tone-ok { background: var(--color-success); }
+.eventDot.tone-warning { background: var(--color-warning); }
+.eventDot.tone-breached { background: var(--color-danger); }
+.eventDot.tone-paused { background: var(--color-neutral); }
+.eventTitle { font-weight: 600; color: var(--color-text); }
+
+/* ---------- Badge compacto ---------- */
+.badge { white-space: nowrap; font-variant-numeric: tabular-nums; gap: 4px; }
+.badgeIcon { width: 12px; height: 12px; flex-shrink: 0; }
+
+/* ---------- Página /sla ---------- */
+.kpiRow { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.checkGrid {
+  display: grid;
+  gap: 6px var(--space-4);
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  padding: var(--space-2) 0;
+}
+.fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  margin: 0;
+  min-width: 0;
+}
+.fieldset legend {
+  padding: 0 var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.durationField { display: flex; gap: var(--space-2); }
+.durationField :global(.input) { flex: 1 1 auto; min-width: 0; }
+.durationField :global(.select) { flex: 0 0 110px; }
+
+.pctCell { display: flex; align-items: center; gap: var(--space-2); min-width: 130px; }
+.pctBar { flex: 1 1 60px; }
+
+/* Lista de calendarios */
+.calendarLayout {
+  display: grid;
+  gap: var(--space-5);
+  grid-template-columns: 300px minmax(0, 1fr);
+  align-items: start;
+}
+@media (max-width: 1000px) {
+  .calendarLayout { grid-template-columns: minmax(0, 1fr); }
+}
+.calendarList { display: flex; flex-direction: column; gap: var(--space-2); }
+.calendarItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.calendarItem:hover { border-color: var(--color-primary-border); background: var(--color-primary-soft); }
+.calendarItemActive { border-color: var(--color-primary); box-shadow: var(--focus-ring); }
+
+/* Editor de ventanas */
+.weekGrid { display: flex; flex-direction: column; gap: var(--space-2); }
+.dayRow {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-2) 0;
+  border-bottom: 1px dashed var(--color-border);
+}
+.dayRow:last-child { border-bottom: 0; }
+@media (max-width: 600px) {
+  .dayRow { grid-template-columns: minmax(0, 1fr); }
+}
+.ranges { display: flex; flex-direction: column; gap: var(--space-2); }
+.range { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.range :global(.input) { width: 120px; }
+
+.weekStrip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+}
+.weekDay { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.weekDayBar {
+  position: relative;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  overflow: hidden;
+}
+.weekDayLabel {
+  text-align: center;
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+.weekSpan {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  background: var(--color-primary);
+  opacity: 0.75;
+  border-radius: 2px;
+}

@@ -87,10 +87,40 @@ def test_valid_token_provisions_user_and_teams(client, db, oidc, rsa_key, ids):
     assert body["roles"] == ["requester"]
 
 
-def test_token_without_groups_claim_keeps_memberships(client, oidc, rsa_key):
+def test_token_without_groups_claim_removes_mapped_memberships(client, oidc, rsa_key):
+    # Keycloak omite el claim "groups" si el usuario no tiene grupos: equivale a "sin grupos".
+    client.get("/me", headers=bearer(make_token(rsa_key)))
+    body = client.get("/me", headers=bearer(make_token(rsa_key, groups=None))).json()
+    assert body["teams"] == []
+
+
+def test_token_without_groups_claim_keeps_memberships_when_configured(client, oidc, rsa_key, monkeypatch):
+    monkeypatch.setattr(settings, "oidc_missing_groups_as_empty", False)
     client.get("/me", headers=bearer(make_token(rsa_key)))
     body = client.get("/me", headers=bearer(make_token(rsa_key, groups=None))).json()
     assert len(body["teams"]) == 1
+
+
+def test_oidc_login_claims_demo_user_outside_production(client, db, oidc, rsa_key, make_user):
+    demo = make_user("jperez", roles=("agent",))
+    demo_row = db.get(User, demo.id)
+    demo_row.keycloak_sub = "dev:jperez"
+    db.commit()
+    body = client.get("/me", headers=bearer(make_token(rsa_key))).json()
+    assert body["id"] == demo.id
+    db.expire_all()
+    assert db.get(User, demo.id).keycloak_sub == "0f6c1d9e-1111-2222-3333-444455556666"
+
+
+def test_oidc_login_never_claims_demo_user_in_production(client, db, oidc, rsa_key, make_user, monkeypatch):
+    demo = make_user("jperez", roles=("agent",))
+    db.get(User, demo.id).keycloak_sub = "dev:jperez"
+    db.commit()
+    monkeypatch.setattr(settings, "environment", "production")
+    body = client.get("/me", headers=bearer(make_token(rsa_key))).json()
+    assert body["id"] != demo.id
+    db.expire_all()
+    assert db.get(User, demo.id).keycloak_sub == "dev:jperez"
 
 
 @pytest.mark.parametrize(
@@ -144,3 +174,74 @@ def test_require_roles_admin_passes_everything():
     assert principal.is_agent and principal.is_approver and principal.has_role("agent")
     with pytest.raises(ValueError):
         security.require_roles()
+
+
+# --------------------------------------------------------------------------- JWKS: abuso
+
+
+def _jwks_document(key) -> dict:
+    import json as _json
+
+    jwk = _json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
+    jwk.update({"kid": "test-key", "use": "sig", "alg": "RS256"})
+    return {"keys": [jwk]}
+
+
+@pytest.fixture
+def counting_jwks(monkeypatch, rsa_key):
+    """JWKS real (ThrottledJWKClient) con la descarga HTTP sustituida por un contador."""
+    monkeypatch.setattr(settings, "auth_mode", "oidc")
+    monkeypatch.setattr(settings, "oidc_issuer", ISSUER)
+    monkeypatch.setattr(settings, "oidc_audience", AUDIENCE)
+    calls = {"n": 0, "fail": False}
+    document = _jwks_document(rsa_key)
+
+    def fake_fetch(self):
+        calls["n"] += 1
+        if calls["fail"]:
+            raise jwt.PyJWKClientConnectionError("sin conexión")
+        if self.jwk_set_cache is not None:
+            self.jwk_set_cache.put(document)
+        return document
+
+    monkeypatch.setattr(jwt.PyJWKClient, "fetch_data", fake_fetch)
+    client = security.ThrottledJWKClient("http://keycloak.invalid/certs", cache_jwk_set=True, lifespan=600)
+    monkeypatch.setattr(security, "get_jwks_client", lambda: client)
+    return calls
+
+
+def _forged(kid, alg="RS256"):
+    other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = int(time.time())
+    claims = {"iss": ISSUER, "aud": AUDIENCE, "sub": "x", "iat": now, "exp": now + 60}
+    if alg == "HS256":
+        return jwt.encode(claims, "secreto-de-prueba-suficientemente-largo-32b", algorithm="HS256", headers={"kid": kid})
+    return jwt.encode(claims, other, algorithm=alg, headers={"kid": kid})
+
+
+def test_unknown_kids_do_not_refetch_jwks_each_request(client, counting_jwks, rsa_key):
+    assert client.get("/me", headers=bearer(make_token(rsa_key))).status_code == 200
+    baseline = counting_jwks["n"]
+    for i in range(20):
+        response = client.get("/me", headers=bearer(_forged(f"kid-aleatorio-{i}")))
+        assert response.status_code == 401
+    # Como mucho un refresco forzado por intervalo, no uno por petición.
+    assert counting_jwks["n"] - baseline <= 1
+    assert client.get("/me", headers=bearer(make_token(rsa_key))).status_code == 200
+
+
+def test_bad_alg_or_kid_rejected_before_jwks(client, counting_jwks, caplog):
+    caplog.set_level("INFO", logger="app.core.security")
+    assert client.get("/me", headers=bearer(_forged("test-key", alg="HS256"))).status_code == 401
+    assert client.get("/me", headers=bearer(_forged("kid\ninyectado"))).status_code == 401
+    assert client.get("/me", headers=bearer("no-es-un-jwt")).status_code == 401
+    assert counting_jwks["n"] == 0
+    # Lo que controla el cliente nunca abre una línea nueva en el log.
+    assert all("\ninyectado" not in record.getMessage() for record in caplog.records)
+
+
+def test_jwks_failure_backoff(client, counting_jwks, rsa_key):
+    counting_jwks["fail"] = True
+    for _ in range(5):
+        assert client.get("/me", headers=bearer(make_token(rsa_key))).status_code == 503
+    assert counting_jwks["n"] == 1  # el resto responde 503 sin volver a llamar a Keycloak

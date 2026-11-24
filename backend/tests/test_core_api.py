@@ -241,3 +241,22 @@ def test_celery_app_registers_core_tasks():
     assert isinstance(celery_app.conf.beat_schedule, dict)
     result = celery_app.tasks["core.ping"].apply()
     assert result.get()["status"] == "ok"
+
+
+def test_requester_priority_cap_and_hourly_limit(client, ids, requester, agent, monkeypatch):
+    """Anti-abuso: un solicitante no elige «Crítica» ni crea tickets sin límite."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "requester_max_priority", "high")
+    monkeypatch.setattr(settings, "tickets_per_user_hour", 2)
+    body = {"title": "Caída", "description": "x", "department_id": ids["departments"]["Telecomunicaciones"]}
+    critical = client.post("/tickets", json={**body, "priority_key": "critical"}, headers=requester.headers)
+    assert critical.status_code == 422
+    assert "agentes" in critical.json()["detail"]
+    assert client.post("/tickets", json={**body, "priority_key": "high"}, headers=requester.headers).status_code == 201
+    assert client.post("/tickets", json=body, headers=requester.headers).status_code == 201
+    limited = client.post("/tickets", json=body, headers=requester.headers)
+    assert limited.status_code == 429 and limited.headers.get("retry-after")
+    # Los agentes no tienen estos límites.
+    as_agent = client.post("/tickets", json={**body, "priority_key": "critical"}, headers=agent.headers)
+    assert as_agent.status_code == 201

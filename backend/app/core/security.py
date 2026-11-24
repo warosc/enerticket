@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -36,9 +37,13 @@ ROLE_AGENT = "agent"
 ROLE_APPROVER = "approver"
 ROLE_REQUESTER = "requester"
 KNOWN_ROLES = frozenset({ROLE_ADMIN, ROLE_AGENT, ROLE_APPROVER, ROLE_REQUESTER})
+# Prefijo del ``keycloak_sub`` de usuarios técnicos (no obtenible por OIDC ni por headers dev).
+SYSTEM_SUB_PREFIX = "system:"
 
 LAST_LOGIN_REFRESH = timedelta(minutes=5)
 _DEV_USERNAME_RE = re.compile(r"^[A-Za-z0-9._@-]{1,150}$")
+# Formato aceptado para el ``kid`` del JWT antes de consultar el JWKS (Keycloak usa base64url).
+_KID_RE = re.compile(r"^[A-Za-z0-9._~+/=-]{1,128}$")
 
 
 @dataclass
@@ -68,6 +73,11 @@ class Principal:
     @property
     def is_approver(self) -> bool:
         return ROLE_APPROVER in self.roles or self.is_admin
+
+    @property
+    def is_system(self) -> bool:
+        """Usuario técnico (p.ej. automatizaciones, ``sub="system:automation"``): no es una persona."""
+        return self.sub.startswith(SYSTEM_SUB_PREFIX)
 
     def has_role(self, *roles: str) -> bool:
         """True si tiene alguno de los roles indicados (admin cumple cualquier rol)."""
@@ -101,6 +111,78 @@ class AuthError(Exception):
 
 # --------------------------------------------------------------------------- JWKS / JWT
 
+def _log_value(value: object, limit: int = 120) -> str:
+    """Representación segura para logs de valores controlados por el cliente (sin saltos)."""
+    text = repr(value)
+    return text if len(text) <= limit else text[:limit] + "...'"
+
+
+class ThrottledJWKClient(jwt.PyJWKClient):
+    """``PyJWKClient`` que no se deja usar para amplificar peticiones contra Keycloak.
+
+    PyJWT vuelve a descargar el JWKS cada vez que llega un ``kid`` desconocido; con un token
+    basura y un ``kid`` aleatorio cualquiera podría forzar una petición HTTP síncrona por
+    request. Aquí:
+
+    - un ``kid`` desconocido refresca el JWKS como mucho una vez cada
+      ``min_refresh_interval`` segundos (rotación de claves real: se detecta enseguida);
+    - las descargas se serializan y se reutiliza una descarga recién hecha (sin estampida);
+    - tras un fallo de conexión se responde 503 sin volver a intentar durante
+      ``failure_backoff`` segundos.
+    """
+
+    def __init__(
+        self,
+        uri: str,
+        *,
+        min_refresh_interval: float = 60.0,
+        failure_backoff: float = 5.0,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(uri, **kwargs)
+        self.min_refresh_interval = min_refresh_interval
+        self.failure_backoff = failure_backoff
+        self._fetch_lock = threading.Lock()
+        self._last_forced_refresh = float("-inf")
+        self._last_fetch_ok = float("-inf")
+        self._last_failure = float("-inf")
+        self._last_data: Any = None
+
+    def fetch_data(self) -> Any:
+        with self._fetch_lock:
+            now = time.monotonic()
+            if self._last_data is not None and now - self._last_fetch_ok < 1.0:
+                return self._last_data  # otro hilo acaba de descargarlo
+            if now - self._last_failure < self.failure_backoff:
+                raise jwt.PyJWKClientConnectionError(
+                    "JWKS no disponible (se reintentará en unos segundos)"
+                )
+            try:
+                data = super().fetch_data()
+            except jwt.PyJWKClientConnectionError:
+                self._last_failure = time.monotonic()
+                raise
+            self._last_fetch_ok = time.monotonic()
+            self._last_data = data
+            return data
+
+    def get_signing_key(self, kid: str) -> jwt.PyJWK:
+        signing_key = self.match_kid(self.get_signing_keys(), kid)
+        if signing_key is not None:
+            return signing_key
+        now = time.monotonic()
+        refresh = False
+        with self._fetch_lock:
+            if now - self._last_forced_refresh >= self.min_refresh_interval:
+                self._last_forced_refresh = now
+                refresh = True
+        if refresh:
+            signing_key = self.match_kid(self.get_signing_keys(refresh=True), kid)
+        if signing_key is None:
+            raise jwt.PyJWKClientError("El token usa una clave de firma desconocida")
+        return signing_key
+
+
 _jwks_client: jwt.PyJWKClient | None = None
 _jwks_lock = threading.Lock()
 
@@ -111,11 +193,12 @@ def get_jwks_client() -> jwt.PyJWKClient:
     if _jwks_client is None:
         with _jwks_lock:
             if _jwks_client is None:
-                _jwks_client = jwt.PyJWKClient(
+                _jwks_client = ThrottledJWKClient(
                     settings.jwks_url,
                     cache_jwk_set=True,
                     lifespan=settings.oidc_jwks_cache_seconds,
                     timeout=5,
+                    min_refresh_interval=settings.oidc_jwks_min_refresh_seconds,
                 )
     return _jwks_client
 
@@ -131,15 +214,31 @@ def decode_access_token(token: str) -> dict[str, Any]:
     """Valida firma, emisor (issuer público), audiencia y expiración del JWT."""
     if not token:
         raise AuthError("Token de acceso requerido")
+    if len(token) > 16384:
+        raise AuthError("Token inválido")
+    # Validación barata del encabezado ANTES de tocar el JWKS (no se consulta Keycloak por
+    # tokens con algoritmos no permitidos o un ``kid`` con formato inválido).
+    try:
+        header = jwt.get_unverified_header(token)
+    except jwt.InvalidTokenError as exc:
+        raise AuthError("Token inválido") from exc
+    alg = header.get("alg")
+    kid = header.get("kid")
+    if alg not in settings.oidc_algorithm_list:
+        logger.info("Token rechazado: algoritmo no permitido %s", _log_value(alg))
+        raise AuthError("Token inválido")
+    if not isinstance(kid, str) or not _KID_RE.fullmatch(kid):
+        logger.info("Token rechazado: kid inválido %s", _log_value(kid))
+        raise AuthError("Token inválido")
     try:
         signing_key = get_jwks_client().get_signing_key_from_jwt(token)
     except jwt.PyJWKClientConnectionError as exc:
-        logger.error("No se pudo descargar el JWKS de %s: %s", settings.jwks_url, exc)
+        logger.error("No se pudo descargar el JWKS de %s: %s", settings.jwks_url, _log_value(str(exc), 300))
         raise AuthError(
             "Servicio de identidad no disponible", status.HTTP_503_SERVICE_UNAVAILABLE
         ) from exc
     except (jwt.PyJWKClientError, jwt.InvalidTokenError) as exc:
-        logger.info("Token rechazado (clave de firma): %s", exc)
+        logger.info("Token rechazado (clave de firma, kid=%s): %s", _log_value(kid), _log_value(str(exc)))
         raise AuthError("Token inválido") from exc
     try:
         return jwt.decode(
@@ -154,7 +253,7 @@ def decode_access_token(token: str) -> dict[str, Any]:
     except jwt.ExpiredSignatureError as exc:
         raise AuthError("Token expirado") from exc
     except jwt.InvalidTokenError as exc:
-        logger.info("Token rechazado: %s", exc)
+        logger.info("Token rechazado: %s", _log_value(str(exc)))
         raise AuthError("Token inválido") from exc
 
 
@@ -176,7 +275,9 @@ def identity_from_claims(claims: dict[str, Any]) -> Identity:
     roles = {str(role) for role in raw_roles or [] if role in KNOWN_ROLES}
     roles.add(ROLE_REQUESTER)
     groups: set[str] | None = None
-    if "groups" in claims:
+    if "groups" in claims or settings.oidc_missing_groups_as_empty:
+        # Keycloak omite el claim cuando el usuario no tiene grupos: sin claim = sin grupos
+        # (así quien sale de todos los grupos AD pierde sus equipos mapeados).
         raw_groups = claims.get("groups") or []
         if isinstance(raw_groups, str):
             raw_groups = [raw_groups]
@@ -256,11 +357,33 @@ def sync_team_memberships(session: Session, user: User, groups: set[str]) -> boo
     return changed
 
 
+def _claim_demo_user(session: Session, identity: Identity) -> User | None:
+    """Laboratorio: vincula un usuario demo (``dev:<usuario>``) con la cuenta OIDC homónima.
+
+    Con ``AUTH_MODE=oidc`` y ``SEED_DEMO=true`` los tickets demo pertenecen a usuarios
+    ``dev:<usuario>``; al primer login real del mismo ``preferred_username`` se reasigna el
+    ``keycloak_sub`` para que la persona vea sus datos demo. Nunca en producción.
+    """
+    if settings.is_production or settings.auth_mode != "oidc" or identity.sub.startswith("dev:"):
+        return None
+    demo = session.scalar(select(User).where(User.keycloak_sub == f"dev:{identity.username}"))
+    if demo is None:
+        return None
+    logger.info("Vinculando usuario demo %s con la cuenta OIDC %s", demo.username, identity.sub)
+    demo.keycloak_sub = identity.sub
+    session.flush()
+    return demo
+
+
 def _upsert_user(session: Session, identity: Identity) -> tuple[User, bool]:
     """Crea o actualiza el usuario por ``keycloak_sub``. Devuelve (usuario, hubo_cambios)."""
     user = session.scalar(select(User).where(User.keycloak_sub == identity.sub))
     now = utcnow()
     roles = sorted(identity.roles)
+    claimed = False
+    if user is None:
+        user = _claim_demo_user(session, identity)
+        claimed = user is not None
     if user is None:
         user = User(
             keycloak_sub=identity.sub,
@@ -275,7 +398,7 @@ def _upsert_user(session: Session, identity: Identity) -> tuple[User, bool]:
         session.add(user)
         session.flush()
         return user, True
-    changed = False
+    changed = claimed
     if user.username != identity.username:
         user.username = identity.username
         changed = True

@@ -18,7 +18,7 @@
   "internationalizationEnabled": true,
   "supportedLocales": ["es", "en"],
   "defaultLocale": "es",
-  "passwordPolicy": "length(12) and notUsername and notEmail and maxLength(128)",
+  "passwordPolicy": "length(12) and notUsername and notEmail and maxLength(128) and passwordHistory(5)",
 
   "bruteForceProtected": true,
   "permanentLockout": false,
@@ -38,10 +38,10 @@
   "ssoSessionMaxLifespanRememberMe": 0,
   "clientSessionIdleTimeout": 0,
   "clientSessionMaxLifespan": 0,
-  "offlineSessionIdleTimeout": 2592000,
+  "offlineSessionIdleTimeout": 86400,
   "offlineSessionMaxLifespanEnabled": true,
-  "offlineSessionMaxLifespan": 5184000,
-  "revokeRefreshToken": false,
+  "offlineSessionMaxLifespan": 604800,
+  "revokeRefreshToken": true,
   "refreshTokenMaxReuse": 0,
   "accessCodeLifespan": 60,
   "accessCodeLifespanUserAction": 300,
@@ -98,7 +98,7 @@
         "description": "${role_default-roles}",
         "composite": true,
         "composites": {
-          "realm": ["requester", "offline_access", "uma_authorization"],
+          "realm": ["requester", "uma_authorization"],
           "client": {
             "account": ["view-profile", "manage-account"]
           }
@@ -130,6 +130,8 @@
       "serviceAccountsEnabled": false,
       "frontchannelLogout": true,
       "fullScopeAllowed": true,
+      "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "basic", "email"],
+      "optionalClientScopes": [],
       "rootUrl": "http://localhost:3000",
       "baseUrl": "/",
       "redirectUris": ["http://localhost:3000/*"],

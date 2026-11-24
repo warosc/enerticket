@@ -126,6 +126,7 @@ def run(session: Session) -> None:
             type_key=type_key,
             priority_key=priority,
             department_id=departments[dept],
+            enforce_limits=False,  # datos de demostración: sin límites anti-abuso
         )
         created += 1
         try:

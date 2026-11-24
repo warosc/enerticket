@@ -59,44 +59,64 @@ export const DEV_GROUPS: readonly string[] = [
   'GG-SD-General',
 ];
 
+/**
+ * Usuarios de demostración (coinciden con el seed `SEED_DEMO=true` del backend: mismo usuario,
+ * nombre, roles y grupo del equipo de su área).
+ */
 export const DEV_PRESETS: readonly DevPreset[] = [
   {
     label: 'Administrador',
     description: 'Acceso total y administración',
-    user: 'lab.admin',
-    name: 'Administrador de laboratorio',
+    user: 'demo.admin',
+    name: 'Administrador Demo',
     roles: ['admin', 'agent'],
     groups: [],
   },
   {
     label: 'Agente Telecomunicaciones',
-    description: 'Atiende tickets del área de Telecomunicaciones',
-    user: 'lab.agente.telecom',
-    name: 'Agente Telecomunicaciones',
+    description: 'Líder del equipo de Telecomunicaciones',
+    user: 'ana.telecom',
+    name: 'Ana López (Telecom)',
     roles: ['agent'],
     groups: ['GG-SD-Telecomunicaciones'],
   },
   {
     label: 'Agente SOC',
-    description: 'Atiende tickets de Ciberseguridad / SOC',
-    user: 'lab.agente.soc',
-    name: 'Agente SOC',
+    description: 'Atiende Ciberseguridad / SOC',
+    user: 'luis.soc',
+    name: 'Luis Pérez (SOC)',
     roles: ['agent'],
     groups: ['GG-SD-SOC'],
   },
   {
-    label: 'Aprobador',
-    description: 'Revisa aprobaciones dirigidas a él',
-    user: 'lab.aprobador',
-    name: 'Aprobador de laboratorio',
-    roles: ['approver'],
-    groups: ['GG-SD-Riesgo'],
+    label: 'Agente Redes',
+    description: 'Atiende Seguridad de Redes',
+    user: 'rosa.redes',
+    name: 'Rosa Méndez (Redes)',
+    roles: ['agent'],
+    groups: ['GG-SD-SeguridadRedes'],
   },
   {
-    label: 'Solicitante',
+    label: 'Aprobadora',
+    description: 'Revisa aprobaciones dirigidas a ella',
+    user: 'marta.aprobadora',
+    name: 'Marta Díaz (Aprobadora)',
+    roles: ['approver'],
+    groups: [],
+  },
+  {
+    label: 'Solicitante (Carlos)',
     description: 'Crea y consulta sus propios tickets',
-    user: 'lab.solicitante',
-    name: 'Solicitante de laboratorio',
+    user: 'carlos.solicitante',
+    name: 'Carlos Ramírez',
+    roles: ['requester'],
+    groups: [],
+  },
+  {
+    label: 'Solicitante (Sofía)',
+    description: 'Crea y consulta sus propios tickets',
+    user: 'sofia.solicitante',
+    name: 'Sofía Hernández',
     roles: ['requester'],
     groups: [],
   },
@@ -167,14 +187,39 @@ function devHeaders(identity: DevIdentity): Record<string, string> {
   return headers;
 }
 
-/** Token de acceso vigente (lo refresca si está por expirar). null si no hay sesión OIDC. */
+/**
+ * ¿Terminó la sesión SSO? (refresh token ausente, vencido o rechazado por Keycloak con 400/401).
+ * Un fallo de red o un Keycloak reiniciándose NO cuenta: el token actual puede seguir siendo válido.
+ */
+function sessionEnded(kc: Keycloak, error?: unknown): boolean {
+  const status = (error as { response?: { status?: unknown } } | undefined)?.response?.status;
+  if (status === 400 || status === 401) return true;
+  const refreshExp = kc.refreshTokenParsed?.exp;
+  return !kc.authenticated || !kc.refreshToken || (typeof refreshExp === 'number' && refreshExp * 1000 <= Date.now());
+}
+
+/** ¿El token de acceso actual sigue vigente (sin margen)? */
+function currentTokenStillValid(kc: Keycloak): boolean {
+  if (!kc.token) return false;
+  try {
+    return !kc.isTokenExpired(0);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Token de acceso vigente (lo refresca si está por expirar). null si no hay sesión OIDC.
+ * Si Keycloak no responde pero el token actual aún no expiró, se sigue usando ese token: un corte
+ * breve del servidor de identidad no debe expulsar al usuario.
+ */
 export async function getAccessToken(): Promise<string | null> {
   const kc = keycloakInstance;
   if (!kc || !kc.authenticated) return null;
   try {
     await kc.updateToken(TOKEN_MIN_VALIDITY);
   } catch {
-    return null;
+    return currentTokenStillValid(kc) ? (kc.token ?? null) : null;
   }
   return kc.token ?? null;
 }
@@ -213,6 +258,14 @@ function recentlyRedirectedToLogin(): boolean {
   }
 }
 
+function clearLoginRedirectMark(): void {
+  try {
+    window.sessionStorage.removeItem(LOGIN_LOOP_GUARD_KEY);
+  } catch {
+    // Ignorado: ver markLoginRedirect.
+  }
+}
+
 function markLoginRedirect(): void {
   try {
     window.sessionStorage.setItem(LOGIN_LOOP_GUARD_KEY, String(Date.now()));
@@ -248,17 +301,43 @@ function initKeycloak(): Promise<Keycloak> {
   return keycloakInitPromise;
 }
 
-configureApiAuth({
-  getHeaders: getAuthHeaders,
-  onUnauthorized: () => {
-    const kc = keycloakInstance;
-    if (AUTH_MODE !== 'oidc' || !kc) return;
-    // Intenta un refresco forzado; si falla, vuelve al login (con protección contra bucles).
-    kc.updateToken(-1).catch(() => {
-      if (!recentlyRedirectedToLogin()) void redirectToLogin(kc);
-    });
-  },
-});
+/** Lo registra AuthProvider para reflejar en la UI que la sesión expiró y se redirige al login. */
+let sessionExpiredListener: (() => void) | null = null;
+let forcedRefresh: Promise<boolean> | null = null;
+
+/**
+ * Ante un 401 de la API (token vencido o revocado en Keycloak): fuerza un refresco del token una sola
+ * vez aunque fallen varias peticiones a la vez. Solo si la sesión SSO terminó de verdad (refresh token
+ * vencido o rechazado) vuelve al login corporativo (con protección contra bucles de redirección). Ante
+ * un fallo de red (Keycloak reiniciándose) no redirige: la petición falla con su error, el usuario no
+ * pierde lo que estaba escribiendo y el refresco periódico vuelve a intentarlo.
+ */
+function handleUnauthorized(): Promise<boolean> {
+  const kc = keycloakInstance;
+  if (AUTH_MODE !== 'oidc' || !kc || !kc.authenticated) return Promise.resolve(false);
+  if (!forcedRefresh) {
+    forcedRefresh = kc
+      .updateToken(-1)
+      .then(() => true)
+      .catch((error: unknown) => {
+        if (!sessionEnded(kc, error)) {
+          console.warn('[auth] Keycloak no responde; se reintentará el refresco del token.');
+          return false;
+        }
+        if (!recentlyRedirectedToLogin()) {
+          sessionExpiredListener?.();
+          void redirectToLogin(kc);
+        }
+        return false;
+      })
+      .finally(() => {
+        forcedRefresh = null;
+      });
+  }
+  return forcedRefresh;
+}
+
+configureApiAuth({ getHeaders: getAuthHeaders, onUnauthorized: handleUnauthorized });
 
 // ---------- Contexto React ----------
 
@@ -333,6 +412,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     let refreshTimer: ReturnType<typeof setInterval> | undefined;
+    let onVisible: (() => void) | undefined;
+    sessionExpiredListener = () => {
+      if (!cancelled) setStatus('redirecting');
+    };
     initKeycloak()
       .then(async (kc) => {
         if (cancelled) return;
@@ -346,23 +429,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await redirectToLogin(kc);
           return;
         }
-        const refresh = () => {
-          kc.updateToken(TOKEN_MIN_VALIDITY * 2).catch(() => {
-            setStatus('redirecting');
-            void redirectToLogin(kc);
-          });
-        };
-        kc.onTokenExpired = refresh;
-        kc.onAuthRefreshError = () => {
+        // Solo se vuelve al login si la sesión realmente terminó (refresh token inválido o vencido);
+        // un fallo de red transitorio se reintenta en el siguiente ciclo sin perder lo que el usuario escribe.
+        const handleRefreshFailure = () => {
+          if (!sessionEnded(kc) || cancelled) return;
           setStatus('redirecting');
           void redirectToLogin(kc);
         };
+        const refresh = () => {
+          kc.updateToken(TOKEN_MIN_VALIDITY * 2).catch(handleRefreshFailure);
+        };
+        kc.onTokenExpired = refresh;
+        kc.onAuthRefreshError = handleRefreshFailure;
         kc.onAuthLogout = () => {
           setUser(null);
           setStatus('redirecting');
           void redirectToLogin(kc);
         };
         refreshTimer = setInterval(refresh, TOKEN_REFRESH_INTERVAL_MS);
+        // Al volver a la pestaña (equipo suspendido, etc.) se valida el token de inmediato.
+        onVisible = () => {
+          if (document.visibilityState === 'visible') refresh();
+        };
+        document.addEventListener('visibilitychange', onVisible);
+        clearLoginRedirectMark();
         await loadMe();
       })
       .catch((e: unknown) => {
@@ -373,7 +463,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
+      sessionExpiredListener = null;
       if (refreshTimer) clearInterval(refreshTimer);
+      if (onVisible) document.removeEventListener('visibilitychange', onVisible);
     };
   }, [loadMe]);
 

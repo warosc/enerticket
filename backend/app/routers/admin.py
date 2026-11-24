@@ -47,7 +47,7 @@ def _get_or_404(session: Session, model: type, obj_id: Any, label: str) -> Any:
 
 def _require_exists(session: Session, model: type, obj_id: int | None, label: str) -> None:
     if obj_id is not None and session.get(model, obj_id) is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{label} no existe")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"{label} no existe")
 
 
 def _department_out(d: Department) -> dict:
@@ -119,7 +119,7 @@ def update_department(
         _require_exists(session, Department, parent_id, "El departamento padre")
         if _creates_cycle(session, department.id, parent_id):
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="La jerarquía de departamentos no puede tener ciclos",
             )
         department.parent_id = parent_id
@@ -182,7 +182,7 @@ def add_member(team_id: int, payload: TeamMemberIn, session: Session = Depends(g
     _get_or_404(session, Team, team_id, "Equipo")
     user = session.get(User, payload.user_id)
     if user is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="El usuario no existe")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="El usuario no existe")
     if session.get(TeamMember, (team_id, user.id)) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="El usuario ya es miembro del equipo")
     member = TeamMember(team_id=team_id, user_id=user.id, role=payload.role)

@@ -102,7 +102,7 @@ export function PageHeader({
       <div>
         {breadcrumb && <div className="breadcrumb">{breadcrumb}</div>}
         <h1 className="page-title">{title}</h1>
-        {subtitle && <p className="page-subtitle">{subtitle}</p>}
+        {subtitle && <div className="page-subtitle">{subtitle}</div>}
       </div>
       {actions && <div className="page-actions">{actions}</div>}
     </header>

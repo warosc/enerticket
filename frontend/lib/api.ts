@@ -53,6 +53,35 @@ export class ApiError extends Error {
   get isNetworkError(): boolean {
     return this.status === 0;
   }
+
+  get isConflict(): boolean {
+    return this.status === 409;
+  }
+
+  /**
+   * Código de error de negocio, si la API lo envía como `{"detail": {"code": "...", "message": "..."}}`
+   * (p.ej. `approval_required` cuando un guard bloquea una transición) o `{"code": "..."}`.
+   */
+  get code(): string | null {
+    return extractErrorCode(this.detail);
+  }
+
+  /** Objeto `detail` estructurado (si la API envió uno), útil para datos extra del error. */
+  get detailObject(): Record<string, unknown> | null {
+    const detail = (this.detail as { detail?: unknown } | null | undefined)?.detail;
+    return detail && typeof detail === 'object' && !Array.isArray(detail) ? (detail as Record<string, unknown>) : null;
+  }
+}
+
+function extractErrorCode(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const detail = (body as { detail?: unknown }).detail;
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const code = (detail as { code?: unknown }).code;
+    if (typeof code === 'string' && code) return code;
+  }
+  const code = (body as { code?: unknown }).code;
+  return typeof code === 'string' && code ? code : null;
 }
 
 // ---------- Inyección de autenticación ----------
@@ -61,7 +90,11 @@ export type AuthHeadersProvider = () => Promise<Record<string, string>>;
 
 interface ApiAuthConfig {
   getHeaders: AuthHeadersProvider;
-  onUnauthorized?: () => void;
+  /**
+   * Se invoca ante un 401. Debe devolver true si renovó las credenciales (p.ej. refresco forzado del
+   * token) y la petición puede reintentarse una vez; false si no hay forma de recuperarse (re-login).
+   */
+  onUnauthorized?: () => Promise<boolean>;
 }
 
 let authConfig: ApiAuthConfig | null = null;
@@ -156,8 +189,8 @@ async function readBody(response: Response): Promise<unknown> {
 /** Devuelve el Response sin interpretar el cuerpo, pero lanza ApiError si no es 2xx. */
 export async function apiFetchRaw(path: string, init: ApiFetchInit = {}): Promise<Response> {
   const { body, query, auth = true, headers: initHeaders, ...rest } = init;
-  const headers = new Headers(initHeaders);
-  if (!headers.has('Accept')) headers.set('Accept', 'application/json');
+  const baseHeaders = new Headers(initHeaders);
+  if (!baseHeaders.has('Accept')) baseHeaders.set('Accept', 'application/json');
 
   let requestBody: BodyInit | undefined;
   if (body !== undefined && body !== null) {
@@ -165,34 +198,43 @@ export async function apiFetchRaw(path: string, init: ApiFetchInit = {}): Promis
       requestBody = body;
     } else {
       requestBody = JSON.stringify(body);
-      if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+      if (!baseHeaders.has('Content-Type')) baseHeaders.set('Content-Type', 'application/json');
     }
   }
-
-  if (auth && authConfig) {
-    const authHeaders = await authConfig.getHeaders();
-    for (const [key, value] of Object.entries(authHeaders)) {
-      if (!headers.has(key)) headers.set(key, value);
-    }
-  }
-
+  // Un ReadableStream solo puede enviarse una vez: en ese caso no se reintenta tras un 401.
+  const canRetry = !(typeof ReadableStream !== 'undefined' && requestBody instanceof ReadableStream);
   const url = apiUrl(path, query);
-  let response: Response;
-  try {
-    response = await fetch(url, { ...rest, headers, body: requestBody });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error;
-    throw new ApiError(
-      `No se pudo conectar con la API (${API_URL}). Verifique su conexión o que el servicio esté disponible.`,
-      0,
-      path,
-      error,
-    );
+
+  const send = async (): Promise<Response> => {
+    const headers = new Headers(baseHeaders);
+    if (auth && authConfig) {
+      const authHeaders = await authConfig.getHeaders();
+      for (const [key, value] of Object.entries(authHeaders)) {
+        if (!headers.has(key)) headers.set(key, value);
+      }
+    }
+    try {
+      return await fetch(url, { ...rest, headers, body: requestBody });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      throw new ApiError(
+        `No se pudo conectar con la API (${API_URL}). Verifique su conexión o que el servicio esté disponible.`,
+        0,
+        path,
+        error,
+      );
+    }
+  };
+
+  let response = await send();
+  if (response.status === 401 && auth && authConfig?.onUnauthorized) {
+    // Token vencido o revocado: se intenta renovar una vez y repetir la petición.
+    const recovered = await authConfig.onUnauthorized().catch(() => false);
+    if (recovered && canRetry) response = await send();
   }
 
   if (!response.ok) {
     const errorBody = await readBody(response).catch(() => undefined);
-    if (response.status === 401 && auth) authConfig?.onUnauthorized?.();
     throw new ApiError(messageFor(response.status, errorBody), response.status, path, errorBody);
   }
   return response;

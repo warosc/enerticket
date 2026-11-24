@@ -15,7 +15,7 @@ export default function CreateTicketForm({
   onCreated: (ticket: TicketOut) => void;
   onCancel: () => void;
 }) {
-  const { user } = useAuth();
+  const { user, isAgent } = useAuth();
   const defaultDepartment = useMemo(() => {
     const own = user?.department_ids.find((id) => catalog.departments.some((d) => d.id === id));
     const general = catalog.departments.find((d) => d.name.toLowerCase() === 'general');
@@ -44,7 +44,14 @@ export default function CreateTicketForm({
     return { related, unrelated };
   }, [catalog.projects, departmentTeamIds]);
 
-  const sortedPriorities = useMemo(() => [...catalog.priorities].sort((a, b) => a.rank - b.rank), [catalog.priorities]);
+  // Quien no es agente elige hasta «Alta» (la API rechaza «Crítica»: REQUESTER_MAX_PRIORITY);
+  // un agente escala la prioridad si corresponde.
+  const sortedPriorities = useMemo(() => {
+    const sorted = [...catalog.priorities].sort((a, b) => a.rank - b.rank);
+    if (isAgent) return sorted;
+    const cap = catalog.priorities.find((p) => p.key === 'high')?.rank;
+    return cap === undefined ? sorted : sorted.filter((p) => p.rank <= cap);
+  }, [catalog.priorities, isAgent]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -149,6 +156,9 @@ export default function CreateTicketForm({
               </option>
             ))}
           </select>
+          {!isAgent && (
+            <span className="field-hint">Si es una urgencia crítica, indíquelo en la descripción: el equipo escalará la prioridad.</span>
+          )}
         </label>
         <label className="field">
           <span className="field-label">Proyecto</span>

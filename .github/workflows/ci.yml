@@ -1,0 +1,231 @@
+# Integración continua del Energuate Service Desk.
+# No usa secretos: las variables de entorno se generan con valores ficticios.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Instalar dependencias
+        run: python -m pip install -r requirements-dev.txt
+      - name: Pruebas
+        run: python -m pytest -q
+      - name: Migraciones Alembic (SQLite, cadena completa)
+        env:
+          DATABASE_URL: sqlite:///./ci-alembic.db
+        run: |
+          # La cadena debe ser lineal: exactamente una cabeza.
+          test "$(python -m alembic heads | wc -l)" -eq 1
+          python -m alembic upgrade head
+          python -m alembic downgrade base
+          python -m alembic upgrade head
+      - name: Auditoría de dependencias (pip-audit)
+        run: |
+          python -m pip install pip-audit
+          python -m pip_audit -r requirements.txt --progress-spinner off
+
+  backend-postgres:
+    name: Backend (PostgreSQL 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      PGHOST: localhost
+      PGUSER: ci
+      PGPASSWORD: ci
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Instalar dependencias
+        run: python -m pip install -r requirements-dev.txt
+      - name: Migraciones sobre una base de la Fase 1 (renombrado legacy, ida y vuelta)
+        env:
+          DATABASE_URL: postgresql+psycopg://ci:ci@localhost:5432/ci_migrations
+        run: |
+          psql -d ci -c "CREATE DATABASE ci_migrations"
+          psql -v ON_ERROR_STOP=1 -d ci_migrations -f tests/sql/phase1_legacy_postgres.sql
+          python -m alembic upgrade head
+          test "$(psql -d ci_migrations -tAc 'SELECT count(*) FROM legacy_tickets')" -eq 1
+          # Seeds dos veces: idempotentes (simula dos arranques del contenedor api).
+          python -m app.seeds
+          python -m app.seeds
+          python -m alembic downgrade base
+          test "$(psql -d ci_migrations -tAc 'SELECT count(*) FROM tickets')" -eq 1
+          python -m alembic upgrade head
+      - name: Pruebas contra PostgreSQL (FOR UPDATE, SKIP LOCKED, JSON, zonas horarias)
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://ci:ci@localhost:5432/ci
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend (tsc + next build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_API_URL: https://servicedesk.example.com/api
+      NEXT_PUBLIC_AUTH_MODE: oidc
+      NEXT_PUBLIC_KEYCLOAK_URL: https://servicedesk.example.com/auth
+      NEXT_PUBLIC_KEYCLOAK_REALM: energuate
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: servicedesk-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Instalar dependencias
+        run: npm ci --no-audit --no-fund
+      - name: Verificación de tipos
+        run: npx tsc --noEmit
+      - name: Build de producción
+        run: npx next build
+
+  infra:
+    name: Infraestructura (compose, Caddy, scripts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generar archivos .env ficticios
+        run: |
+          sed -E 's/=replace-[^[:space:]]*/=ciPlaceholderValue123/' .env.example > ci-lab.env
+          sed -E 's/=replace-[^[:space:]]*/=ciPlaceholderValue123/' .env.production.example \
+            | sed -E 's/^APP_DOMAIN=.*/APP_DOMAIN=servicedesk.example.com/' > ci-prod.env
+      - name: docker compose config (laboratorio)
+        run: docker compose --env-file ci-lab.env -f docker-compose.yml config -q
+      - name: docker compose config (producción)
+        run: docker compose --env-file ci-prod.env -f docker-compose.prod.yml config -q
+      - name: Comprobación previa de producción (deploy/preflight.sh)
+        run: |
+          # La plantilla sin editar DEBE fallar.
+          grep -v '^#' .env.production.example | grep '=' > template.env
+          if docker run --rm --network none --env-file template.env \
+              -v "$PWD/deploy/preflight.sh:/preflight.sh:ro" --entrypoint /bin/sh redis:7-alpine /preflight.sh; then
+            echo "preflight aceptó valores replace-..."; exit 1
+          fi
+          # Valores únicos y suficientemente largos: debe pasar.
+          awk -F= '/^[A-Z0-9_]+=replace-/ { printf "%s=ciValue%02dAbcdefghijklmn\n", $1, NR; next } /^[A-Z0-9_]+=/ { print }' \
+              .env.production.example \
+            | sed -E 's/^APP_DOMAIN=.*/APP_DOMAIN=servicedesk.example.com/; s/^SMTP_FROM=.*/SMTP_FROM=servicedesk@example.com/; s/^TLS_MODE=.*/TLS_MODE=files/' \
+            > preflight-ok.env
+          docker run --rm --network none --env-file preflight-ok.env \
+            -v "$PWD/deploy/preflight.sh:/preflight.sh:ro" --entrypoint /bin/sh redis:7-alpine /preflight.sh
+      - name: Garantías de producción
+        run: |
+          cfg=$(docker compose --env-file ci-prod.env -f docker-compose.prod.yml config --format json)
+          # Solo Caddy publica puertos.
+          published=$(echo "$cfg" | jq -r '.services | to_entries[] | select((.value.ports // []) | length > 0) | .key')
+          test "$published" = "caddy" || { echo "Servicios con puertos publicados: $published"; exit 1; }
+          # Valores fijados.
+          echo "$cfg" | jq -e '.services.api.environment.AUTH_MODE == "oidc"'
+          echo "$cfg" | jq -e '.services.api.environment.SEED_DEMO == "false"'
+          echo "$cfg" | jq -e '.services.api.environment.ENVIRONMENT == "production"'
+          echo "$cfg" | jq -e '.services["keycloak-config"].environment.KC_LAB_USERS == "false"'
+          echo "$cfg" | jq -e '.services.keycloak.command[0] == "start"'
+          # Endurecimiento: Caddy solo NET_BIND_SERVICE; api/worker/beat/web de solo lectura.
+          echo "$cfg" | jq -e '.services.caddy.cap_drop == ["ALL"] and .services.caddy.cap_add == ["NET_BIND_SERVICE"]'
+          echo "$cfg" | jq -e '[.services.api, .services.worker, .services.beat, .services.web] | all(.read_only == true and .cap_drop == ["ALL"])'
+          echo "$cfg" | jq -e '.services.db.depends_on.preflight.condition == "service_completed_successfully"'
+          echo "$cfg" | jq -e '.services.api.environment.SEED_FLOWS_EXAMPLES == "false"'
+          # Laboratorio: puertos solo en 127.0.0.1.
+          docker compose --env-file ci-lab.env -f docker-compose.yml config --format json \
+            | jq -e '[.services[] | (.ports // [])[] | .host_ip] | all(. == "127.0.0.1")'
+      - name: Validar Caddyfile
+        run: |
+          docker run --rm \
+            -e APP_DOMAIN=servicedesk.example.com -e TLS_MODE=internal \
+            -e ADMIN_ALLOWED_CIDRS="10.0.0.0/8 127.0.0.1/32" \
+            -e MAX_REQUEST_BODY=30MB \
+            -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Validar realm de Keycloak (JSON)
+        run: jq -e '.realm == "energuate"' keycloak/realm-energuate.json
+      - name: ShellCheck
+        run: |
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:stable \
+            -x scripts/backup.sh scripts/restore.sh scripts/healthcheck.sh scripts/get-test-token.sh scripts/lib.sh
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:stable -s sh deploy/preflight.sh backend/docker-entrypoint.sh
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:stable -s sh keycloak/configure-ldap.sh
+
+  images:
+    name: Build de imágenes Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [backend, backend-postgres, frontend, infra]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Imagen backend
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          tags: energuate-service-desk/backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+      - name: Imagen web
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          push: false
+          tags: energuate-service-desk/web:ci
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://servicedesk.example.com/api
+            NEXT_PUBLIC_AUTH_MODE=oidc
+            NEXT_PUBLIC_KEYCLOAK_URL=https://servicedesk.example.com/auth
+            NEXT_PUBLIC_KEYCLOAK_REALM=energuate
+            NEXT_PUBLIC_KEYCLOAK_CLIENT_ID=servicedesk-web
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web

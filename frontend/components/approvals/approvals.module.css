@@ -1,0 +1,191 @@
+/* Aprobaciones (módulo flows). Usa los tokens de app/globals.css. */
+
+.card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.cardActionable {
+  border-color: var(--color-warning);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.cardTitle {
+  font-weight: 650;
+  font-size: var(--text-base);
+  overflow-wrap: anywhere;
+}
+.cardSub {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+.transition {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+}
+.stateChip {
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.reason {
+  font-size: var(--text-sm);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Etapas ---------- */
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+}
+.step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 28px;
+  bottom: 0;
+  width: 2px;
+  background: var(--color-border);
+}
+.stepMarker {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  border: 2px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  z-index: 1;
+}
+.markerPending { border-color: var(--color-warning); color: var(--color-warning); background: var(--color-warning-soft); }
+.markerApproved { border-color: var(--color-success); background: var(--color-success); color: var(--color-text-inverse); }
+.markerRejected { border-color: var(--color-danger); background: var(--color-danger); color: var(--color-text-inverse); }
+.markerCancelled { border-style: dashed; }
+
+.stepHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-height: 28px;
+}
+.stepName { font-weight: 600; font-size: var(--text-sm); }
+.stepMeta { font-size: var(--text-xs); color: var(--color-text-muted); }
+
+.decisions {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.decision {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+.decisionName { font-weight: 600; color: var(--color-text); }
+.decisionApproved { color: var(--color-success); font-weight: 600; }
+.decisionRejected { color: var(--color-danger); font-weight: 600; }
+.decisionComment {
+  flex-basis: 100%;
+  font-style: italic;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Formulario de decisión ---------- */
+.decide {
+  border-top: 1px dashed var(--color-border);
+  padding-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.decideActions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* ---------- Políticas ---------- */
+.stepEditor {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--color-surface-alt);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.stepEditorHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--color-surface);
+  user-select: none;
+}
+.chip input { accent-color: var(--color-primary); }
+.chipOn { background: var(--color-primary-soft); border-color: var(--color-primary-border); color: var(--color-primary); }
