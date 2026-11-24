@@ -23,6 +23,8 @@ export function SlaProgress({
   label: string;
 }) {
   const width = Math.min(100, Math.max(0, pct));
+  // Un consumo mínimo (> 0 %) sigue siendo visible como una franja.
+  const fill = width > 0 && width < 2 ? 2 : width;
   return (
     <div
       className={`${styles.progress} ${styles[`tone-${tone}`] ?? ''}`}
@@ -32,7 +34,7 @@ export function SlaProgress({
       aria-valuemax={100}
       aria-valuenow={Math.round(width)}
     >
-      <div className={styles.progressFill} style={{ width: `${width}%` }} />
+      <div className={styles.progressFill} style={{ width: `${fill}%` }} />
       {markerPct !== undefined && markerPct > 0 && markerPct < 100 && (
         <span className={styles.progressMarker} style={{ left: `${markerPct}%` }} aria-hidden="true" />
       )}

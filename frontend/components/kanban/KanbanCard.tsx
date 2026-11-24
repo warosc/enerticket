@@ -78,32 +78,34 @@ function CardContent({
           </span>
           <span className={styles.assigneeName}>{ticket.assignee ? ticket.assignee.display_name : 'Sin asignar'}</span>
         </span>
-        <SlaBadge ticket={ticket} />
-        <span className="subtle text-xs nowrap" title={`Actualizado: ${formatDateTime(ticket.updated_at)}`}>
+        <span className={styles.cardTime} title={`Actualizado: ${formatDateTime(ticket.updated_at)}`}>
           {formatRelative(ticket.updated_at)}
         </span>
-        {interactive && targets && targets.length > 0 && onMove && (
-          <select
-            className={`select select-sm ${styles.moveSelect}`}
-            aria-label={`Mover ${ticket.key} a otro estado`}
-            value=""
-            disabled={pending}
-            onChange={onSelect}
-            onPointerDown={stop}
-            onMouseDown={stop}
-            onTouchStart={stop}
-            onKeyDown={stop}
-          >
-            <option value="">Mover a…</option>
-            {targets.map(({ state, transition }) => (
-              <option key={state.id} value={state.key}>
-                {state.name}
-                {transition.requires_approval ? ' (requiere aprobación)' : ''}
-              </option>
-            ))}
-          </select>
-        )}
       </div>
+      <div className={styles.cardSla}>
+        <SlaBadge ticket={ticket} />
+      </div>
+      {interactive && targets && targets.length > 0 && onMove && (
+        <select
+          className={`select select-sm ${styles.moveSelect}`}
+          aria-label={`Mover ${ticket.key} a otro estado`}
+          value=""
+          disabled={pending}
+          onChange={onSelect}
+          onPointerDown={stop}
+          onMouseDown={stop}
+          onTouchStart={stop}
+          onKeyDown={stop}
+        >
+          <option value="">Mover a…</option>
+          {targets.map(({ state, transition }) => (
+            <option key={state.id} value={state.key}>
+              {state.name}
+              {transition.requires_approval ? ' (requiere aprobación)' : ''}
+            </option>
+          ))}
+        </select>
+      )}
     </>
   );
 }

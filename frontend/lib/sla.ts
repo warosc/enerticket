@@ -390,8 +390,13 @@ export function remainingLabel(info: SlaMetricInfo): string {
 /** Porcentaje del objetivo consumido (0-100+). */
 export function consumedPct(info: SlaMetricInfo): number {
   const total = info.target_minutes * 60;
-  if (!total || info.remaining_business_seconds === null) return 0;
-  return Math.max(0, ((total - info.remaining_business_seconds) / total) * 100);
+  if (!total) return 0;
+  // Tiempo hábil consumido (excluye pausas); si falta, se deriva del restante.
+  const elapsed =
+    info.elapsed_business_seconds ??
+    (info.remaining_business_seconds !== null ? total - info.remaining_business_seconds : null);
+  if (elapsed === null) return 0;
+  return Math.max(0, (elapsed / total) * 100);
 }
 
 export function formatPct(value: number | null | undefined): string {

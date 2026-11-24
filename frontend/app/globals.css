@@ -219,12 +219,21 @@ hr {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   min-height: 100vh;
+  /* La columna de la barra lateral se pinta en toda la altura de la página (incluso en páginas
+     largas y capturas de página completa); la barra queda fija arriba con su propio scroll. */
+  background: linear-gradient(
+    to right,
+    var(--color-sidebar-bg) var(--sidebar-width),
+    var(--color-bg) var(--sidebar-width)
+  );
 }
 
 .app-sidebar {
   position: sticky;
   top: 0;
+  align-self: start;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--color-sidebar-bg);
@@ -341,7 +350,7 @@ hr {
 }
 .app-topbar-title { font-weight: 600; font-size: var(--text-base); }
 .app-topbar-live { margin-right: var(--space-2); }
-.app-menu-toggle { display: none; }
+.app-topbar .app-menu-toggle { display: none; }
 .app-env-tag {
   font-size: var(--text-xs);
   font-weight: 600;
@@ -362,7 +371,7 @@ hr {
 .app-backdrop { display: none; }
 
 @media (max-width: 900px) {
-  .app-shell { grid-template-columns: minmax(0, 1fr); }
+  .app-shell { grid-template-columns: minmax(0, 1fr); background: var(--color-bg); }
   .app-sidebar {
     position: fixed;
     inset: 0 auto 0 0;
@@ -384,7 +393,7 @@ hr {
     border: 0;
     padding: 0;
   }
-  .app-menu-toggle { display: inline-flex; }
+  .app-topbar .app-menu-toggle { display: inline-flex; }
   .app-topbar { padding: 0 var(--space-4); }
   .app-content { padding: var(--space-4); }
 }
@@ -459,6 +468,22 @@ hr {
 .kpi-accent-success { border-top: 3px solid var(--status-done); }
 .kpi-accent-danger { border-top: 3px solid var(--priority-critical); }
 .kpi-accent-neutral { border-top: 3px solid var(--status-todo); }
+
+/* Rejilla de KPI equilibrada: --kpi-cols columnas en escritorio (p.ej. 7 tarjetas = 4 + 3)
+   y 2 columnas compactas en móvil; con un número impar la primera ocupa toda la fila. */
+.kpi-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(var(--kpi-cols, 4), minmax(0, 1fr));
+}
+@media (max-width: 760px) {
+  .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+  .kpi-grid > :first-child:nth-last-child(odd) { grid-column: 1 / -1; }
+  .kpi-grid .kpi { padding: var(--space-3); gap: 2px; }
+  .kpi-grid .kpi-label { font-size: var(--text-xs); }
+  .kpi-grid .kpi-value { font-size: var(--text-2xl); }
+  .kpi-grid .kpi-sub { font-size: 11px; line-height: 1.3; }
+}
 
 /* ---------- Botones ---------- */
 .btn {
@@ -553,6 +578,18 @@ hr {
 .toolbar .field { min-width: 150px; flex: 1 1 150px; }
 .toolbar .field-search { flex: 2 1 240px; }
 
+/* Panel de filtros plegable en móvil (CollapsibleFilters): en escritorio siempre visible. */
+.filter-toggle { display: none; }
+@media (max-width: 640px) {
+  .filter-panel { padding: var(--space-3); }
+  .filter-toggle { display: flex; justify-content: space-between; width: 100%; }
+  .filter-toggle-chevron { transition: transform 0.15s ease; }
+  .filter-panel.is-open .filter-toggle-chevron { transform: rotate(180deg); }
+  .filter-panel:not(.is-open) .filter-panel-body { display: none; }
+  .filter-panel.is-open .filter-panel-body { margin-top: var(--space-3); }
+}
+@media (prefers-reduced-motion: reduce) { .filter-toggle-chevron { transition: none; } }
+
 /* ---------- Tablas ---------- */
 .table-wrap { width: 100%; overflow-x: auto; }
 .table {
@@ -581,9 +618,84 @@ hr {
 .table tbody tr:hover td { background: var(--color-surface-alt); }
 .table tr.is-clickable { cursor: pointer; }
 .table .col-num { text-align: right; font-variant-numeric: tabular-nums; }
+.table th.text-right, .table td.text-right { text-align: right; }
+.table th.text-center, .table td.text-center { text-align: center; }
+/* Botones de acción de una fila: en línea, sin envolver y alineados a la derecha. */
+.row-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--space-1); flex-wrap: nowrap; }
 .table .col-key { white-space: nowrap; font-family: var(--font-mono); font-size: var(--text-xs); }
 .table .col-title { min-width: 220px; }
 .table-compact td, .table-compact th { padding: 7px var(--space-3); }
+/*
+ * Tablas apiladas en móvil (.table-stack): por debajo de 640px cada fila se muestra como tarjeta.
+ *  - td.cell-head: ocupa toda la línea (p.ej. título).
+ *  - td[data-label]: línea «ETIQUETA  valor».
+ *  - td sin clase: elemento en línea (clave, chips de estado/prioridad/SLA).
+ *  - td.cell-actions: botones alineados a la derecha en su propia línea.
+ *  - td.cell-hide-sm: se oculta.
+ */
+@media (max-width: 640px) {
+  .table-stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+  .table-stack, .table-stack tbody { display: block; width: 100%; }
+  .table-stack tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .table-stack tbody tr:last-child { border-bottom: 0; }
+  .table-stack td {
+    display: block;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+    text-align: left;
+  }
+  .table-stack tbody tr:hover td { background: transparent; }
+  .table-stack .col-title { min-width: 0; }
+  .table-stack td.col-num { text-align: left; }
+  .table-stack td.cell-head,
+  .table-stack td[data-label],
+  .table-stack td.cell-actions { flex: 1 1 100%; }
+  .table-stack td.cell-head { font-size: var(--text-base); }
+  /* La etiqueta flota a la izquierda; flow-root hace que la celda crezca si la etiqueta ocupa dos líneas. */
+  .table-stack td[data-label] {
+    display: flow-root;
+    min-height: 20px;
+    padding-left: 112px;
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+  .table-stack td[data-label]::before {
+    content: attr(data-label);
+    float: left;
+    margin-left: -112px;
+    padding-top: 2px;
+    width: 104px;
+    overflow-wrap: normal;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-subtle);
+  }
+  .table-stack td.cell-actions { display: flex; justify-content: flex-end; order: 3; }
+  /* Primero la cabecera y los chips; después las líneas con etiqueta y al final las acciones. */
+  .table-stack td[data-label] { order: 2; }
+  .panel:not(.panel-flush) > .table-wrap > .table-stack tr,
+  .panel:not(.panel-flush) > .table-stack tr { padding-left: 0; padding-right: 0; }
+  .table-stack td.cell-hide-sm { display: none; }
+  .table-stack td.nowrap { white-space: normal; }
+}
+
 .table-empty {
   padding: var(--space-8) var(--space-4);
   text-align: center;
@@ -721,6 +833,11 @@ hr {
   color: var(--color-text-muted);
 }
 
+@media (max-width: 640px) {
+  .pagination { justify-content: center; text-align: center; }
+  .pagination > .row-sm { justify-content: center; }
+}
+
 /* ---------- Listas de definición (metadatos) ---------- */
 .dl {
   display: grid;
@@ -843,6 +960,23 @@ hr {
 /* ---------- Edición en línea del ticket ---------- */
 .inline-edit { display: flex; flex-direction: column; gap: var(--space-3); }
 .ticket-meta-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: 4px; }
+
+/* Detalle del ticket: en una sola columna (≤ 1100px) se reordena para mostrar primero el resumen:
+   Detalles → SLA → Cambiar estado → Aprobaciones → Gestión → Descripción → Actividad → Adjuntos. */
+.ticket-slot:empty { display: none; }
+@media (max-width: 1100px) {
+  .ticket-layout { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-5); }
+  .ticket-layout > .ticket-main,
+  .ticket-layout > .ticket-aside { display: contents; }
+  .ticket-slot-details { order: 1; }
+  .ticket-slot-sla { order: 2; }
+  .ticket-slot-transitions { order: 3; }
+  .ticket-slot-approvals { order: 4; }
+  .ticket-slot-manage { order: 5; }
+  .ticket-slot-description { order: 6; }
+  .ticket-slot-activity { order: 7; }
+  .ticket-slot-attachments { order: 8; }
+}
 
 /* KPI como enlace al listado filtrado */
 .kpi-link { color: inherit; transition: box-shadow 0.15s ease, transform 0.15s ease; }

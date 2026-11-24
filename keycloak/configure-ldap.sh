@@ -19,6 +19,8 @@
 #      Directory real de Energuate (vendor ad, READ_ONLY) y su mapper de grupos
 #      (group-ldap-mapper, READ_ONLY); prueba la conexión y sincroniza grupos.
 #   6. Asigna roles de realm a grupos según KC_GROUP_ROLE_MAP.
+#   7. Asigna el tema de login KC_LOGIN_THEME (por defecto "energuate", montado
+#      en /opt/keycloak/themes/energuate) si está instalado; vacío = no tocar.
 #
 # Ninguna credencial está en el repositorio: todo llega por variables de
 # entorno (ver .env.example y docs/AD_INTEGRATION.md).
@@ -457,6 +459,30 @@ harden_offline_access() {
     log "sesiones offline limitadas (inactividad 1 día, máximo 7 días)"
 }
 
+# --- tema de login -----------------------------------------------------------------
+# El realm ya importado no recibe cambios de realm-energuate.json: se fija loginTheme aquí
+# de forma idempotente. Si el tema no está instalado en el servidor no se aplica (Keycloak
+# mostraría un error en la pantalla de login).
+apply_login_theme() {
+    _theme=${KC_LOGIN_THEME-energuate}
+    if [ -z "$_theme" ]; then
+        log "KC_LOGIN_THEME vacío: se conserva el tema de login actual"
+        return 0
+    fi
+    if ! kc get serverinfo 2>/dev/null | tr -d ' \r\n' | grep -q "\"name\":\"$_theme\""; then
+        warn "el tema de login '$_theme' no está instalado en Keycloak (¿falta el volumen keycloak/themes/$_theme?); no se aplica"
+        return 0
+    fi
+    _current=$(kc get "realms/$KC_REALM" --fields loginTheme 2>/dev/null | tr -d ' \r\n' \
+        | sed -n 's/.*"loginTheme":"\([^"]*\)".*/\1/p')
+    if [ "$_current" = "$_theme" ]; then
+        log "tema de login '$_theme' ya asignado al realm $KC_REALM"
+        return 0
+    fi
+    kc update "realms/$KC_REALM" -s loginTheme="$_theme"
+    log "tema de login '$_theme' asignado al realm $KC_REALM"
+}
+
 # --- federación LDAP / Active Directory -----------------------------------------
 
 validate_ldap_settings() {
@@ -685,6 +711,7 @@ main() {
     configure_lab_users
     configure_ldap
     apply_group_role_map
+    apply_login_theme
     log "configuración de Keycloak completada"
 }
 

@@ -138,7 +138,7 @@ export function DepartmentsSection() {
           <EmptyState title="No hay departamentos" />
         ) : (
           <form onSubmit={saveEdit} className="table-wrap">
-            <table className="table">
+            <table className="table table-stack">
               <thead>
                 <tr>
                   <th scope="col">Nombre</th>
@@ -152,7 +152,7 @@ export function DepartmentsSection() {
                 {departments.map((d) =>
                   editing?.id === d.id ? (
                     <tr key={d.id}>
-                      <td>
+                      <td className="cell-head">
                         <input
                           className="input input-sm"
                           value={editing.name}
@@ -163,7 +163,7 @@ export function DepartmentsSection() {
                           aria-label="Nombre del departamento"
                         />
                       </td>
-                      <td>
+                      <td data-label="Padre">
                         <select
                           className="select select-sm"
                           value={editing.parent_id ?? ''}
@@ -182,20 +182,24 @@ export function DepartmentsSection() {
                             ))}
                         </select>
                       </td>
-                      <td className="text-right nowrap">
-                        <button type="submit" className="btn btn-primary btn-sm" disabled={mutation.busy}>
-                          Guardar
-                        </button>{' '}
-                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(null)}>
-                          Cancelar
-                        </button>
+                      <td className="text-right nowrap cell-actions">
+                        <span className="row-actions">
+                          <button type="submit" className="btn btn-primary btn-sm" disabled={mutation.busy}>
+                            Guardar
+                          </button>
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(null)}>
+                            Cancelar
+                          </button>
+                        </span>
                       </td>
                     </tr>
                   ) : (
                     <tr key={d.id}>
-                      <td className="strong">{d.name}</td>
-                      <td className="muted">{nameOf(d.parent_id)}</td>
-                      <td className="text-right">
+                      <td className="strong cell-head">{d.name}</td>
+                      <td className="muted" data-label="Padre">
+                        {nameOf(d.parent_id)}
+                      </td>
+                      <td className="text-right cell-actions">
                         <button
                           type="button"
                           className="btn btn-sm"
@@ -350,7 +354,7 @@ export function TeamsSection() {
           <EmptyState title="No hay equipos" />
         ) : (
           <form onSubmit={saveEdit} className="table-wrap">
-            <table className="table">
+            <table className="table table-stack">
               <thead>
                 <tr>
                   <th scope="col">Equipo</th>
@@ -365,7 +369,7 @@ export function TeamsSection() {
                 {teams.map((t) =>
                   editing?.id === t.id ? (
                     <tr key={t.id}>
-                      <td>
+                      <td className="cell-head">
                         <input
                           className="input input-sm"
                           value={editing.name}
@@ -376,7 +380,7 @@ export function TeamsSection() {
                           aria-label="Nombre del equipo"
                         />
                       </td>
-                      <td>
+                      <td data-label="Departamento">
                         <select
                           className="select select-sm"
                           value={editing.department_id}
@@ -390,7 +394,7 @@ export function TeamsSection() {
                           ))}
                         </select>
                       </td>
-                      <td>
+                      <td data-label="Grupo externo">
                         <input
                           className="input input-sm mono"
                           value={editing.external_group ?? ''}
@@ -399,27 +403,29 @@ export function TeamsSection() {
                           aria-label="Grupo externo"
                         />
                       </td>
-                      <td className="text-right nowrap">
-                        <button type="submit" className="btn btn-primary btn-sm" disabled={mutation.busy}>
-                          Guardar
-                        </button>{' '}
-                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(null)}>
-                          Cancelar
-                        </button>
+                      <td className="text-right nowrap cell-actions">
+                        <span className="row-actions">
+                          <button type="submit" className="btn btn-primary btn-sm" disabled={mutation.busy}>
+                            Guardar
+                          </button>
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(null)}>
+                            Cancelar
+                          </button>
+                        </span>
                       </td>
                     </tr>
                   ) : (
                     <tr key={t.id}>
-                      <td className="strong">{t.name}</td>
-                      <td>{depName(t.department_id)}</td>
-                      <td>
+                      <td className="strong cell-head">{t.name}</td>
+                      <td data-label="Departamento">{depName(t.department_id)}</td>
+                      <td data-label="Grupo externo">
                         {t.external_group ? (
                           <span className="mono text-xs">{t.external_group}</span>
                         ) : (
                           <span className="subtle">Manual</span>
                         )}
                       </td>
-                      <td className="text-right">
+                      <td className="text-right cell-actions">
                         <button
                           type="button"
                           className="btn btn-sm"
@@ -558,7 +564,7 @@ export function MembersSection() {
             <EmptyState title="El equipo no tiene miembros" />
           ) : (
             <div className="table-wrap">
-              <table className="table">
+              <table className="table table-stack">
                 <thead>
                   <tr>
                     <th scope="col">Nombre</th>
@@ -573,10 +579,14 @@ export function MembersSection() {
                 <tbody>
                   {(membersRes.data ?? []).map((m) => (
                     <tr key={m.user_id}>
-                      <td className="strong">{m.display_name}</td>
-                      <td className="mono text-xs">{m.username}</td>
-                      <td className="muted">{m.email ?? '—'}</td>
-                      <td>
+                      <td className="strong cell-head">{m.display_name}</td>
+                      <td className="mono text-xs" data-label="Usuario">
+                        {m.username}
+                      </td>
+                      <td className="muted" data-label="Correo">
+                        {m.email ?? '—'}
+                      </td>
+                      <td data-label="Rol">
                         <select
                           className="select select-sm"
                           style={{ width: 'auto' }}
@@ -592,7 +602,7 @@ export function MembersSection() {
                           ))}
                         </select>
                       </td>
-                      <td className="text-right">
+                      <td className="text-right cell-actions">
                         <button
                           type="button"
                           className="btn btn-sm btn-ghost"
@@ -764,7 +774,7 @@ export function ProjectsSection() {
           <EmptyState title="No hay proyectos registrados" />
         ) : (
           <div className="table-wrap">
-            <table className="table">
+            <table className="table table-stack">
               <thead>
                 <tr>
                   <th scope="col">Código</th>
@@ -780,16 +790,16 @@ export function ProjectsSection() {
                 {projects.map((p) => (
                   <tr key={p.id}>
                     <td className="col-key">{p.code}</td>
-                    <td className="strong">{p.name}</td>
-                    <td>{teamName(p.team_id)}</td>
-                    <td>
+                    <td className="strong cell-head">{p.name}</td>
+                    <td data-label="Equipo">{teamName(p.team_id)}</td>
+                    <td data-label="Responsable">
                       {p.owner_id === null ? (
                         <span className="subtle">—</span>
                       ) : (
                         (userById.get(p.owner_id)?.display_name ?? `Usuario #${p.owner_id}`)
                       )}
                     </td>
-                    <td className="text-right">
+                    <td className="text-right cell-actions">
                       <button type="button" className="btn btn-sm" onClick={() => startEdit(p)}>
                         Editar
                       </button>

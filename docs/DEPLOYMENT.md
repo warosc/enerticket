@@ -91,6 +91,8 @@ docker compose -f docker-compose.prod.yml config -q && echo "configuración vál
 docker compose -f docker-compose.prod.yml run --rm preflight   # credenciales: sin replace-..., >= 16 caracteres
 
 # 5. Construir y arrancar
+#    (Docker Compose v5 en Windows: si el build falla en Buildx Bake por entitlements "fs",
+#     anteponga BUILDX_BAKE_ENTITLEMENTS_FS=0; en PowerShell: $env:BUILDX_BAKE_ENTITLEMENTS_FS=0)
 docker compose -f docker-compose.prod.yml build --pull
 docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml ps          # todos "healthy" (Keycloak tarda 2-3 min)
@@ -143,8 +145,11 @@ La imagen `web` incrusta `APP_DOMAIN` en el build (`NEXT_PUBLIC_*`): constrúyal
 5. Compruebe *User federation → energuate-ad* y *Groups* (grupos `GG-SD-*` con sus roles).
 
 `keycloak-config` se ejecuta en cada `up` y vuelve a fijar: redirect URIs del cliente
-`servicedesk-web` (`https://APP_DOMAIN/*`), federación AD, mapper de grupos, grupos de equipo y
-roles por grupo. Los demás cambios hechos en la consola se conservan.
+`servicedesk-web` (`https://APP_DOMAIN/*`), federación AD, mapper de grupos, grupos de equipo,
+roles por grupo y el tema de login `energuate` (`keycloak/themes/energuate`, montado de solo
+lectura en `/opt/keycloak/themes/energuate`; `KC_LOGIN_THEME` vacío lo deja como esté). Con
+`start` Keycloak guarda los temas en caché: tras cambiar el CSS del tema reinicie `keycloak`.
+Los demás cambios hechos en la consola se conservan.
 
 ## 5. Actualizaciones
 

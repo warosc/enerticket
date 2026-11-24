@@ -86,6 +86,16 @@ docker compose down                        # detener (conserva datos)
 docker compose down -v                     # detener y BORRAR todos los datos
 ```
 
+> **Docker Compose v5 en Windows:** si `docker compose build` (o `up --build`) falla al preparar
+> el build con Buildx Bake (error de *entitlements* / permisos `fs`), defina
+> `BUILDX_BAKE_ENTITLEMENTS_FS=0` solo para ese comando:
+> PowerShell `$env:BUILDX_BAKE_ENTITLEMENTS_FS=0; docker compose build web` ·
+> Git Bash/WSL `BUILDX_BAKE_ENTITLEMENTS_FS=0 docker compose build web`.
+
+La pantalla de login usa el tema propio `energuate` (`keycloak/themes/energuate`, montado en
+Keycloak y asignado al realm por `keycloak-config`); en laboratorio (`start-dev`) los cambios de
+CSS se ven al recargar, sin caché de temas.
+
 ### Usuarios de laboratorio
 
 Con `KC_LAB_USERS=true`, `keycloak-config` crea usuarios **locales** de Keycloak con la contraseña

@@ -4,7 +4,6 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { formatNumber } from '@/lib/format';
 import { formatHours, type ReportByDepartment } from '@/lib/reports';
 import { AXIS_PROPS, ChartPanel, ChartTooltip, type LegendEntry } from './ChartPanel';
-import styles from './reports.module.css';
 
 const SERIES: (LegendEntry & { dataKey: 'created' | 'resolved' | 'backlog' })[] = [
   { key: 'created', dataKey: 'created', label: 'Creados', color: 'var(--series-1)' },
@@ -14,8 +13,27 @@ const SERIES: (LegendEntry & { dataKey: 'created' | 'resolved' | 'backlog' })[] 
 
 /** Recorta nombres largos de departamento para el eje (el tooltip muestra el nombre completo). */
 function shortName(name: string): string {
-  return name.length > 18 ? `${name.slice(0, 17)}…` : name;
+  return name.length > 20 ? `${name.slice(0, 19)}…` : name;
 }
+
+/**
+ * Etiqueta del eje de departamentos en una sola línea (Recharts parte el texto en varias líneas si
+ * no cabe); el nombre completo queda en <title> y en el tooltip de la barra.
+ */
+function DepartmentTick({ x = 0, y = 0, payload }: { x?: number; y?: number; payload?: { value?: string | number } }) {
+  const name = String(payload?.value ?? '');
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <title>{name}</title>
+      <text x={-6} y={0} dy={4} textAnchor="end" fontSize={11} fill="var(--chart-axis)">
+        {shortName(name)}
+      </text>
+    </g>
+  );
+}
+
+/** Alto por departamento (tres barras agrupadas) en el gráfico de barras horizontales. */
+const ROW_HEIGHT = 46;
 
 export default function DepartmentChart({ data, className }: { data: ReportByDepartment; className?: string }) {
   const empty = data.items.every((d) => d.created === 0 && d.resolved === 0 && d.backlog === 0);
@@ -28,23 +46,32 @@ export default function DepartmentChart({ data, className }: { data: ReportByDep
       empty={empty}
       chart={
         <div
-          className={styles.chartTall}
+          style={{ width: '100%', height: Math.max(320, data.items.length * ROW_HEIGHT + 36) }}
           role="img"
           aria-label={`Tickets por departamento: ${data.items
             .map((d) => `${d.department} ${d.created} creados, ${d.resolved} resueltos, ${d.backlog} en backlog`)
             .join('; ')}`}
         >
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data.items} margin={{ top: 8, right: 8, bottom: 0, left: -16 }} barCategoryGap="24%" barGap={2}>
-              <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
-              <XAxis
+            {/* Barras horizontales: los nombres largos de departamento quedan en el eje vertical sin superponerse. */}
+            <BarChart
+              data={data.items}
+              layout="vertical"
+              margin={{ top: 4, right: 16, bottom: 0, left: 0 }}
+              barCategoryGap="18%"
+              barGap={1}
+            >
+              <CartesianGrid horizontal={false} stroke="var(--chart-grid)" />
+              <XAxis type="number" allowDecimals={false} axisLine={false} {...AXIS_PROPS} />
+              <YAxis
+                type="category"
                 dataKey="department"
-                {...AXIS_PROPS}
+                width={142}
+                tickLine={false}
+                tick={<DepartmentTick />}
                 axisLine={{ stroke: 'var(--chart-grid)' }}
-                tickFormatter={shortName}
                 interval={0}
               />
-              <YAxis allowDecimals={false} axisLine={false} {...AXIS_PROPS} />
               <Tooltip cursor={{ fill: 'var(--color-primary-soft)' }} content={<ChartTooltip />} />
               {SERIES.map((s) => (
                 <Bar
@@ -52,8 +79,8 @@ export default function DepartmentChart({ data, className }: { data: ReportByDep
                   dataKey={s.dataKey}
                   name={s.label}
                   fill={s.color}
-                  radius={[4, 4, 0, 0]}
-                  maxBarSize={28}
+                  radius={[0, 3, 3, 0]}
+                  maxBarSize={12}
                   isAnimationActive={false}
                 />
               ))}

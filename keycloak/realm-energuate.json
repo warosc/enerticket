@@ -3,6 +3,7 @@
   "realm": "energuate",
   "displayName": "Energuate Service Desk",
   "displayNameHtml": "<strong>Energuate</strong> Service Desk",
+  "loginTheme": "energuate",
   "enabled": true,
   "sslRequired": "external",
   "registrationAllowed": false,

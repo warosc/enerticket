@@ -52,6 +52,9 @@ export default function TicketDetailPage() {
   const [transitionComment, setTransitionComment] = useState('');
   const [transitioning, setTransitioning] = useState<number | null>(null);
   const [transitionError, setTransitionError] = useState<TransitionFailure | null>(null);
+  // Transición a un estado final (cerrar, rechazar) pendiente de confirmación.
+  const [confirmTransition, setConfirmTransition] = useState<WorkflowTransition | null>(null);
+  const confirmButton = useRef<HTMLButtonElement | null>(null);
   const [editingContent, setEditingContent] = useState(false);
 
   const requestId = useRef(0);
@@ -126,6 +129,15 @@ export default function TicketDetailPage() {
 
   const reloadSilently = useCallback(() => void load(true), [load]);
 
+  // La confirmación se descarta si el ticket cambia de estado (p.ej. en vivo) y recibe el foco al abrirse.
+  const currentStatusId = ticket?.status.id;
+  useEffect(() => {
+    setConfirmTransition(null);
+  }, [currentStatusId]);
+  useEffect(() => {
+    if (confirmTransition) confirmButton.current?.focus();
+  }, [confirmTransition]);
+
   // Nombres conocidos para el historial: agentes (si se pudieron cargar) más las personas del ticket y comentarios.
   const knownUsers = useMemo<UserRef[]>(() => {
     const map = new Map<number, UserRef>();
@@ -145,9 +157,22 @@ export default function TicketDetailPage() {
   );
 
   const stateName = (id: number) => catalog?.workflow.states.find((s) => s.id === id)?.name ?? '';
+  const isFinalTarget = (transition: WorkflowTransition) =>
+    Boolean(catalog?.workflow.states.find((s) => s.id === transition.to_state_id)?.is_final);
+
+  function requestTransition(transition: WorkflowTransition) {
+    // Las transiciones a estados finales (cerrar, rechazar) piden confirmación a todos los roles.
+    if (isFinalTarget(transition)) {
+      setTransitionError(null);
+      setConfirmTransition(transition);
+      return;
+    }
+    void runTransition(transition);
+  }
 
   async function runTransition(transition: WorkflowTransition) {
     if (!ticket) return;
+    setConfirmTransition(null);
     setTransitioning(transition.id);
     setTransitionError(null);
     try {
@@ -227,9 +252,9 @@ export default function TicketDetailPage() {
       <ErrorAlert error={catalogError} onRetry={() => void reloadCatalog()} />
       <ErrorAlert error={loadError} onRetry={() => void load()} />
 
-      <div className="grid-main-aside">
-        <div className="stack-lg" style={{ minWidth: 0 }}>
-          <section className="panel" aria-labelledby="description-title">
+      <div className="grid-main-aside ticket-layout">
+        <div className="stack-lg ticket-main" style={{ minWidth: 0 }}>
+          <section className="panel ticket-slot ticket-slot-description" aria-labelledby="description-title">
             <div className="panel-header">
               <h2 className="panel-title" id="description-title">
                 Descripción
@@ -258,10 +283,10 @@ export default function TicketDetailPage() {
           </section>
 
           {(availableTransitions.length > 0 || transitionError) && (
-            <section className="panel stack" aria-labelledby="transitions-title">
+            <section className="panel stack ticket-slot ticket-slot-transitions" aria-labelledby="transitions-title">
               <div className="panel-header" style={{ marginBottom: 0 }}>
                 <h2 className="panel-title" id="transitions-title">
-                  Cambiar estado
+                  {canEdit ? 'Cambiar estado' : 'Acciones'}
                 </h2>
                 <span className="panel-subtitle">Estado actual: {ticket.status.name}</span>
               </div>
@@ -289,7 +314,8 @@ export default function TicketDetailPage() {
                       type="button"
                       className={`btn ${primary ? 'btn-primary' : 'btn-secondary'}`}
                       disabled={transitioning !== null}
-                      onClick={() => void runTransition(tr)}
+                      aria-expanded={isFinalTarget(tr) ? confirmTransition?.id === tr.id : undefined}
+                      onClick={() => requestTransition(tr)}
                       title={tr.requires_approval ? 'Esta transición requiere aprobación' : `Pasar a ${stateName(tr.to_state_id)}`}
                     >
                       {transitioning === tr.id ? 'Aplicando…' : tr.name || stateName(tr.to_state_id)}
@@ -298,13 +324,51 @@ export default function TicketDetailPage() {
                   );
                 })}
               </div>
+              {confirmTransition && (
+                <div
+                  className="alert alert-warning"
+                  role="alertdialog"
+                  aria-labelledby="confirm-transition-title"
+                  aria-describedby="confirm-transition-desc"
+                >
+                  <div className="alert-body stack-sm">
+                    <div className="alert-title" id="confirm-transition-title">
+                      ¿Confirma «{confirmTransition.name || stateName(confirmTransition.to_state_id)}» para {ticket.key}?
+                    </div>
+                    <p id="confirm-transition-desc">
+                      El ticket pasará a «{stateName(confirmTransition.to_state_id)}», un estado final
+                      {transitionComment.trim() ? ', con el comentario indicado' : ''}.
+                    </p>
+                    <div className="row-sm">
+                      <button
+                        ref={confirmButton}
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        disabled={transitioning !== null}
+                        onClick={() => void runTransition(confirmTransition)}
+                      >
+                        {transitioning === confirmTransition.id
+                          ? 'Aplicando…'
+                          : `Sí, ${(confirmTransition.name || stateName(confirmTransition.to_state_id)).toLowerCase()}`}
+                      </button>
+                      <button type="button" className="btn btn-sm" onClick={() => setConfirmTransition(null)}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </section>
           )}
 
-          <ApprovalsPanel ticket={ticket} onChange={reloadSilently} />
-          <AttachmentsPanel ticket={ticket} />
+          <div className="ticket-slot ticket-slot-approvals">
+            <ApprovalsPanel ticket={ticket} onChange={reloadSilently} />
+          </div>
+          <div className="ticket-slot ticket-slot-attachments">
+            <AttachmentsPanel ticket={ticket} />
+          </div>
 
-          <section className="panel">
+          <section className="panel ticket-slot ticket-slot-activity">
             <div className="tabs" role="tablist" aria-label="Actividad del ticket">
               <button
                 type="button"
@@ -353,8 +417,8 @@ export default function TicketDetailPage() {
           </section>
         </div>
 
-        <aside className="stack" style={{ minWidth: 0 }}>
-          <section className="panel">
+        <aside className="stack ticket-aside" style={{ minWidth: 0 }}>
+          <section className="panel ticket-slot ticket-slot-details">
             <div className="panel-header">
               <h2 className="panel-title">Detalles</h2>
               <span className="mono text-sm muted">{ticket.key}</span>
@@ -383,20 +447,24 @@ export default function TicketDetailPage() {
             </dl>
           </section>
 
-          <SlaPanel ticket={ticket} />
+          <div className="ticket-slot ticket-slot-sla">
+            <SlaPanel ticket={ticket} />
+          </div>
 
           {canEdit && catalog && user && (
-            <TicketEditPanel
-              ticket={ticket}
-              catalog={catalog}
-              agents={agents}
-              agentsError={agentsError}
-              me={user}
-              onSaved={(updated) => {
-                setTicket(updated);
-                void load(true);
-              }}
-            />
+            <div className="ticket-slot ticket-slot-manage">
+              <TicketEditPanel
+                ticket={ticket}
+                catalog={catalog}
+                agents={agents}
+                agentsError={agentsError}
+                me={user}
+                onSaved={(updated) => {
+                  setTicket(updated);
+                  void load(true);
+                }}
+              />
+            </div>
           )}
         </aside>
       </div>

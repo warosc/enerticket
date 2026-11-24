@@ -20,7 +20,7 @@ export default function AssigneeTable({ data, className }: { data: ReportByAssig
         <p className="muted text-sm">Sin tickets asignados ni resueltos con los filtros actuales.</p>
       ) : (
         <div className="table-wrap">
-          <table className="table table-compact">
+          <table className="table table-compact table-stack">
             <thead>
               <tr>
                 <th scope="col">Agente</th>
@@ -36,22 +36,22 @@ export default function AssigneeTable({ data, className }: { data: ReportByAssig
             <tbody>
               {data.items.map((row) => (
                 <tr key={row.assignee_id ?? 'unassigned'}>
-                  <td className={row.assignee_id === null ? 'muted' : undefined}>{row.assignee}</td>
-                  <td className="col-num strong">{formatNumber(row.open)}</td>
-                  <td aria-hidden="true">
+                  <td className={`cell-head strong ${row.assignee_id === null ? 'muted' : ''}`}>{row.assignee}</td>
+                  <td className="col-num strong" data-label="Abiertos">{formatNumber(row.open)}</td>
+                  <td aria-hidden="true" className="cell-hide-sm">
                     <div className={styles.meter}>
                       <div className={styles.meterFill} style={{ width: `${(row.open / maxOpen) * 100}%` }} />
                     </div>
                   </td>
-                  <td className="col-num">
+                  <td className="col-num" data-label="Críticos">
                     {row.open_critical > 0 ? (
                       <span className="badge badge-priority-critical">{formatNumber(row.open_critical)}</span>
                     ) : (
                       <span className="subtle">0</span>
                     )}
                   </td>
-                  <td className="col-num">{formatNumber(row.resolved)}</td>
-                  <td className="col-num">{formatHours(row.mttr_hours)}</td>
+                  <td className="col-num" data-label="Resueltos">{formatNumber(row.resolved)}</td>
+                  <td className="col-num" data-label="MTTR">{formatHours(row.mttr_hours)}</td>
                 </tr>
               ))}
             </tbody>

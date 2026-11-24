@@ -28,17 +28,30 @@ function CountTooltip({ active, payload }: { active?: boolean; payload?: Tooltip
   );
 }
 
-/** Barras de una sola serie (conteos) con alternativa de tabla accesible. */
+/** Recorta etiquetas largas del eje (el tooltip muestra el nombre completo). */
+function shortLabel(label: string, max: number): string {
+  return label.length > max ? `${label.slice(0, max - 1)}…` : label;
+}
+
+const BAR_ROW_HEIGHT = 34;
+
+/**
+ * Barras de una sola serie (conteos) con alternativa de tabla accesible.
+ * `layout="horizontal"` dibuja barras horizontales (categorías en el eje vertical): recomendado
+ * para muchas categorías o nombres largos, porque las etiquetas no se superponen en pantallas estrechas.
+ */
 export default function CountBarChart({
   title,
   subtitle,
   data,
   emptyText = 'Sin datos para mostrar.',
+  layout = 'vertical',
 }: {
   title: string;
   subtitle?: string;
   data: CountDatum[];
   emptyText?: string;
+  layout?: 'vertical' | 'horizontal';
 }) {
   const [asTable, setAsTable] = useState(false);
   const total = data.reduce((sum, d) => sum + d.count, 0);
@@ -76,6 +89,37 @@ export default function CountBarChart({
               ))}
             </tbody>
           </table>
+        </div>
+      ) : layout === 'horizontal' ? (
+        <div
+          role="img"
+          aria-label={`${title}: ${data.map((d) => `${d.label} ${d.count}`).join(', ')}`}
+          style={{ width: '100%', height: Math.max(280, data.length * BAR_ROW_HEIGHT + 32) }}
+        >
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data} layout="vertical" margin={{ top: 4, right: 16, bottom: 0, left: 0 }} barCategoryGap="22%">
+              <CartesianGrid horizontal={false} stroke="var(--chart-grid)" />
+              <XAxis
+                type="number"
+                allowDecimals={false}
+                tickLine={false}
+                axisLine={false}
+                tick={{ fontSize: 11, fill: 'var(--chart-axis)' }}
+              />
+              <YAxis
+                type="category"
+                dataKey="label"
+                width={96}
+                tickLine={false}
+                axisLine={{ stroke: 'var(--chart-grid)' }}
+                tick={{ fontSize: 12, fill: 'var(--color-text-muted)' }}
+                tickFormatter={(value: string) => shortLabel(String(value), 14)}
+                interval={0}
+              />
+              <Tooltip cursor={{ fill: 'var(--color-primary-soft)' }} content={<CountTooltip />} />
+              <Bar dataKey="count" fill="var(--chart-series-1)" radius={[0, 4, 4, 0]} maxBarSize={22} />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       ) : (
         <div className="chart-box" role="img" aria-label={`${title}: ${data.map((d) => `${d.label} ${d.count}`).join(', ')}`}>

@@ -83,7 +83,7 @@ export default function SlaCompliance({ data, className }: { data: ReportSla; cl
           </div>
           {data.by_priority.length > 0 && (
             <div className="table-wrap">
-              <table className="table table-compact">
+              <table className="table table-compact table-stack">
                 <caption className="visually-hidden">Cumplimiento por prioridad</caption>
                 <thead>
                   <tr>
@@ -98,11 +98,11 @@ export default function SlaCompliance({ data, className }: { data: ReportSla; cl
                 <tbody>
                   {data.by_priority.map((p) => (
                     <tr key={p.priority}>
-                      <td>{p.name}</td>
-                      {metricKeys.map((key) => {
+                      <td className="cell-head strong">{p.name}</td>
+                      {metricKeys.map((key, index) => {
                         const cell = p.metrics[key];
                         return (
-                          <td key={key} className="col-num">
+                          <td key={key} className="col-num" data-label={metrics[index]?.label ?? key}>
                             {cell ? (
                               <>
                                 <span className="strong">{formatPct(cell.compliance_pct)}</span>{' '}

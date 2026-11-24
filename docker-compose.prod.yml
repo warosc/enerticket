@@ -274,6 +274,8 @@ services:
     volumes:
       - ./keycloak/realm-energuate.json:/opt/keycloak/data/import/realm-energuate.json:ro
       - ${KC_TRUSTSTORE_DIR:-./keycloak/truststore}:/opt/keycloak/conf/truststores:ro
+      # Tema de login propio (keycloak-config lo asigna al realm; requiere reiniciar Keycloak al cambiarlo).
+      - ./keycloak/themes/energuate:/opt/keycloak/themes/energuate:ro
     networks: [edge, backend, egress]
     depends_on:
       <<: *after-preflight

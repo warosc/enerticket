@@ -6,7 +6,17 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Icon } from '@/components/icons';
 import SlaBadge from '@/components/ticket/SlaBadge';
 import CreateTicketForm from '@/components/tickets/CreateTicketForm';
-import { Alert, EmptyState, ErrorAlert, Loading, PageHeader, Pagination, PriorityBadge, StatusBadge } from '@/components/ui';
+import {
+  Alert,
+  CollapsibleFilters,
+  EmptyState,
+  ErrorAlert,
+  Loading,
+  PageHeader,
+  Pagination,
+  PriorityBadge,
+  StatusBadge,
+} from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { CATEGORY_LABELS, formatDateTime, formatRelative } from '@/lib/format';
 import { useApiResource, useCatalog, useDebouncedValue } from '@/lib/hooks';
@@ -157,15 +167,16 @@ function TicketsView() {
   );
   const priorities = useMemo(() => (catalog ? [...catalog.priorities].sort((a, b) => b.rank - a.rank) : []), [catalog]);
 
-  const hasFilters = Boolean(
-    filters.status ||
-      filters.category ||
-      filters.priority ||
-      filters.department_id ||
-      filters.team_id ||
-      filters.scope ||
-      filters.q,
-  );
+  const activeFilters = [
+    filters.status,
+    filters.category,
+    filters.priority,
+    filters.department_id,
+    filters.team_id,
+    filters.scope,
+    filters.q,
+  ].filter(Boolean).length;
+  const hasFilters = activeFilters > 0;
 
   function clearFilters() {
     setSearch('');
@@ -222,7 +233,7 @@ function TicketsView() {
         <CreateTicketForm catalog={catalog} onCreated={handleCreated} onCancel={() => setShowCreate(false)} />
       )}
 
-      <section className="panel" aria-label="Filtros">
+      <CollapsibleFilters activeCount={activeFilters}>
         <div className="toolbar">
           <label className="field field-search">
             <span className="field-label">Buscar</span>
@@ -335,7 +346,7 @@ function TicketsView() {
             </button>
           )}
         </div>
-      </section>
+      </CollapsibleFilters>
 
       <section className="panel panel-flush" aria-busy={loading}>
         <ErrorAlert error={error} onRetry={() => void reload()} />
@@ -348,7 +359,7 @@ function TicketsView() {
         ) : data ? (
           <>
             <div className="table-wrap" style={{ opacity: loading ? 0.6 : 1 }}>
-              <table className="table">
+              <table className="table table-stack">
                 <thead>
                   <tr>
                     <th scope="col">Clave</th>
@@ -367,7 +378,7 @@ function TicketsView() {
                       <td className="col-key">
                         <Link href={`/tickets/${t.id}`}>{t.key}</Link>
                       </td>
-                      <td className="col-title">
+                      <td className="col-title cell-head">
                         <Link href={`/tickets/${t.id}`} style={{ color: 'inherit', fontWeight: 500 }}>
                           {t.title}
                         </Link>
@@ -384,12 +395,14 @@ function TicketsView() {
                       <td>
                         <SlaBadge ticket={t} />
                       </td>
-                      <td>
+                      <td data-label="Departamento">
                         <div className="text-sm">{t.department.name}</div>
                         <div className="text-xs subtle">{t.team?.name ?? 'Sin equipo'}</div>
                       </td>
-                      <td className="text-sm">{t.assignee?.display_name ?? <span className="subtle">Sin asignar</span>}</td>
-                      <td className="nowrap text-sm muted" title={formatDateTime(t.updated_at)}>
+                      <td className="text-sm" data-label="Asignado">
+                        {t.assignee?.display_name ?? <span className="subtle">Sin asignar</span>}
+                      </td>
+                      <td className="nowrap text-sm muted" data-label="Actualizado" title={formatDateTime(t.updated_at)}>
                         {formatRelative(t.updated_at)}
                       </td>
                     </tr>

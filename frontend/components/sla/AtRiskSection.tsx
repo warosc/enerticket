@@ -114,7 +114,7 @@ export default function AtRiskSection() {
           )
         ) : (
           <div className="table-wrap">
-            <table className="table">
+            <table className="table table-stack">
               <thead>
                 <tr>
                   <th scope="col">Ticket</th>
@@ -132,7 +132,7 @@ export default function AtRiskSection() {
                   const tone = breached ? 'breached' : item.paused ? 'paused' : 'warning';
                   return (
                     <tr key={item.instance_id}>
-                      <td className="col-title">
+                      <td className="col-title cell-head">
                         <Link href={`/tickets/${item.ticket.id}`} className="mono text-xs">
                           {item.ticket.key}
                         </Link>
@@ -146,7 +146,7 @@ export default function AtRiskSection() {
                           {item.policy_name ? ` · ${item.policy_name}` : ''}
                         </div>
                       </td>
-                      <td className="text-sm nowrap">{SLA_METRIC_LABELS[item.metric]}</td>
+                      <td className="text-sm nowrap" data-label="Métrica">{SLA_METRIC_LABELS[item.metric]}</td>
                       <td>
                         <span className={`badge ${TONE_BADGE_CLASS[tone]}`}>
                           {breached ? 'Vencido' : item.paused ? 'En pausa' : 'En riesgo'}
@@ -155,7 +155,11 @@ export default function AtRiskSection() {
                           {remainingText(item)}
                         </div>
                       </td>
-                      <td className="text-sm nowrap" title={item.target_at ? formatDateTime(item.target_at) : undefined}>
+                      <td
+                        className="text-sm nowrap"
+                        data-label="Vencimiento"
+                        title={item.target_at ? formatDateTime(item.target_at) : undefined}
+                      >
                         {item.target_at ? formatRelative(item.target_at) : '—'}
                         <div className="text-xs subtle">objetivo {formatBusinessDuration(item.target_minutes * 60)}</div>
                       </td>
@@ -165,7 +169,7 @@ export default function AtRiskSection() {
                       <td>
                         <StatusBadge status={item.ticket.status} />
                       </td>
-                      <td className="text-sm">
+                      <td className="text-sm" data-label="Asignado">
                         {item.ticket.assignee?.display_name ?? <span className="subtle">Sin asignar</span>}
                       </td>
                     </tr>

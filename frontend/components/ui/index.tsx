@@ -3,8 +3,9 @@
 /**
  * Componentes de interfaz reutilizables (fundación). Usan las clases de app/globals.css.
  */
-import type { ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import type { PriorityRef, StatusRef } from '@/lib/types';
+import { Icon } from '../icons';
 
 const PRIORITY_KEYS = new Set(['low', 'medium', 'high', 'critical']);
 const CATEGORY_KEYS = new Set(['todo', 'in_progress', 'waiting', 'done']);
@@ -166,6 +167,45 @@ export function Pagination({
         </button>
       </div>
     </nav>
+  );
+}
+
+/**
+ * Panel de filtros: en escritorio se muestra siempre; en móvil (< 640px) queda plegado tras un
+ * botón «Filtros (N activos)» para no ocupar toda la pantalla.
+ */
+export function CollapsibleFilters({
+  activeCount,
+  children,
+  label = 'Filtros',
+}: {
+  activeCount: number;
+  children: ReactNode;
+  label?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const bodyId = useId();
+  const countText = activeCount > 0 ? ` (${activeCount} activo${activeCount === 1 ? '' : 's'})` : '';
+  return (
+    <section className={`panel filter-panel${open ? ' is-open' : ''}`} aria-label={label}>
+      <button
+        type="button"
+        className="btn filter-toggle"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="row-sm">
+          <Icon name="filter" width={15} height={15} />
+          {label}
+          {countText}
+        </span>
+        <Icon name="chevronDown" width={16} height={16} className="filter-toggle-chevron" />
+      </button>
+      <div id={bodyId} className="filter-panel-body">
+        {children}
+      </div>
+    </section>
   );
 }
 

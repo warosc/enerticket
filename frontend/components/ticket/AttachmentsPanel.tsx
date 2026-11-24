@@ -361,9 +361,7 @@ export default function AttachmentsPanel({ ticket }: { ticket: Ticket }) {
           >
             <div className="strong">{dragging ? 'Suelte los archivos aquí' : 'Arrastre archivos o haga clic para seleccionar'}</div>
             <div className="text-xs" id={`attachments-hint-${ticketId}`}>
-              {settings.allowed_extensions.length > 0
-                ? `Permitidos: ${settings.allowed_extensions.join(', ')}`
-                : 'Documentos, imágenes, capturas de red y archivos comprimidos'}
+              Documentos, hojas de cálculo, imágenes, capturas de red y comprimidos · máx. {settings.max_mb} MB
             </div>
             <input
               ref={inputRef}
@@ -374,6 +372,17 @@ export default function AttachmentsPanel({ ticket }: { ticket: Ticket }) {
               onChange={(e) => onFilesSelected(e.target.files)}
             />
           </div>
+        )}
+        {canUpload && remaining > 0 && settings.allowed_extensions.length > 0 && (
+          <details className={styles.allowed}>
+            <summary>Ver tipos permitidos</summary>
+            <p className="text-xs muted">
+              {[...settings.allowed_extensions]
+                .sort()
+                .map((ext) => `.${ext}`)
+                .join(' · ')}
+            </p>
+          </details>
         )}
         {closed && <p className="text-sm muted">El ticket está cerrado: no se pueden agregar adjuntos.</p>}
         {canUpload && remaining === 0 && (

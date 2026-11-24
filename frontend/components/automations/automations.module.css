@@ -123,3 +123,7 @@
   gap: 2px;
   font-size: var(--text-xs);
 }
+
+/* Botón de eliminar (solo icono) junto a «Editar». */
+.deleteBtn { color: var(--color-text-muted); }
+.deleteBtn:hover:not(:disabled) { color: var(--color-danger); background: var(--color-danger-soft); }

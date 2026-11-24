@@ -1,0 +1,254 @@
+/*
+ * Tema de login "energuate" (Keycloak 26.1, padre keycloak.v2 / PatternFly 5).
+ * Misma paleta que el portal (frontend/app/globals.css): azul marino de la barra lateral,
+ * azul corporativo de los botones primarios y marca "ESD" en ámbar.
+ */
+:root {
+  --esd-navy: #0e2a4a;
+  --esd-navy-2: #163a63;
+  --esd-primary: #1559a3;
+  --esd-primary-hover: #0f4785;
+  --esd-primary-active: #0b3a6e;
+  --esd-accent: #f2a900;
+  --esd-bg: #f3f5f9;
+  --esd-surface: #ffffff;
+  --esd-border: #dde3ec;
+  --esd-border-strong: #c5cfdc;
+  --esd-text: #14243a;
+  --esd-text-muted: #56677d;
+  --esd-text-subtle: #7b8a9e;
+  --esd-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+
+  /* Variables globales de PatternFly 5 → paleta del portal. */
+  --pf-v5-global--primary-color--100: var(--esd-primary);
+  --pf-v5-global--primary-color--200: var(--esd-primary-hover);
+  --pf-v5-global--link--Color: var(--esd-primary);
+  --pf-v5-global--link--Color--hover: var(--esd-primary-hover);
+  --pf-v5-global--active-color--100: var(--esd-primary);
+  --pf-v5-global--FontFamily--text: var(--esd-font);
+  --pf-v5-global--FontFamily--heading: var(--esd-font);
+  --pf-v5-global--FontFamily--redhatfont--text: var(--esd-font);
+  --pf-v5-global--FontFamily--redhatfont--heading: var(--esd-font);
+  --pf-v5-global--Color--100: var(--esd-text);
+  --pf-v5-global--Color--200: var(--esd-text-muted);
+  --pf-v5-global--BorderColor--100: var(--esd-border-strong);
+
+  /* Sin la imagen de polígonos del tema por defecto. */
+  --keycloak-bg-logo-url: none;
+}
+
+/* ---------- Fondo sobrio: franja azul marino superior sobre gris claro ---------- */
+.login-pf body,
+body#keycloak-bg {
+  min-height: 100vh;
+  background: linear-gradient(180deg, var(--esd-navy) 0, var(--esd-navy-2) 300px, var(--esd-bg) 300px) no-repeat;
+  background-color: var(--esd-bg);
+  font-family: var(--esd-font);
+  color: var(--esd-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.pf-v5-c-login {
+  background: transparent;
+  align-items: flex-start;
+  padding-top: 56px;
+  padding-bottom: 32px;
+}
+
+.pf-v5-c-login__container {
+  grid-template-columns: minmax(0, 30rem);
+  justify-content: center;
+  row-gap: 24px;
+}
+
+/* ---------- Marca (igual que la barra lateral del portal) ---------- */
+.pf-v5-c-login__header {
+  padding: 0;
+  margin: 0;
+  display: flex;
+  justify-content: center;
+}
+
+#kc-header-wrapper {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 0;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1.2;
+  text-transform: none;
+  letter-spacing: normal;
+  text-align: left;
+  color: #c9d6e6 !important;
+  white-space: nowrap;
+}
+
+/* Logotipo "ESD" en ámbar, como .app-brand-mark del portal. */
+#kc-header-wrapper::before {
+  content: "ESD";
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  background: var(--esd-accent);
+  color: var(--esd-navy);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+#kc-header-wrapper strong {
+  display: block;
+  color: #ffffff;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+/* ---------- Tarjeta ---------- */
+.pf-v5-c-login__main {
+  background: var(--esd-surface);
+  border: 1px solid var(--esd-border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(16, 35, 64, 0.16);
+  overflow: hidden;
+}
+
+.pf-v5-c-login__main-header {
+  padding-top: 32px;
+  row-gap: 12px;
+  align-items: center;
+}
+
+#kc-page-title,
+.pf-v5-c-login__main-header .pf-v5-c-title {
+  font-family: var(--esd-font);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--esd-text);
+}
+
+.pf-v5-c-form__label,
+.pf-v5-c-form__label-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--esd-text);
+}
+.pf-v5-c-form__group-label {
+  padding-bottom: 6px;
+}
+
+/* Campos con borde completo y esquinas redondeadas (como .input del portal). */
+.pf-v5-c-form-control {
+  --pf-v5-c-form-control--BorderRadius: 6px;
+  --pf-v5-c-form-control--before--BorderColor: var(--esd-border-strong);
+  --pf-v5-c-form-control--after--BorderColor: transparent;
+  --pf-v5-c-form-control--hover--after--BorderBottomColor: var(--esd-primary);
+  --pf-v5-c-form-control--focus--after--BorderBottomColor: var(--esd-primary);
+  border-radius: 6px;
+  background: var(--esd-surface);
+}
+.pf-v5-c-form-control::before,
+.pf-v5-c-form-control::after {
+  border-radius: 6px;
+}
+.pf-v5-c-form-control:focus-within {
+  box-shadow: 0 0 0 3px rgba(21, 89, 163, 0.25);
+}
+.pf-v5-c-form-control > input,
+.pf-v5-c-form-control > select {
+  min-height: 40px;
+  font-family: var(--esd-font);
+  font-size: 15px;
+}
+
+/* Grupo de contraseña: el botón "ver" comparte el borde redondeado. */
+.pf-v5-c-input-group > .pf-v5-c-input-group__item:first-child .pf-v5-c-form-control,
+.pf-v5-c-input-group > .pf-v5-c-input-group__item:first-child .pf-v5-c-form-control::before,
+.pf-v5-c-input-group > .pf-v5-c-input-group__item:first-child .pf-v5-c-form-control::after {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.pf-v5-c-input-group > .pf-v5-c-input-group__item:last-child .pf-v5-c-button.pf-m-control {
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+.pf-v5-c-button.pf-m-control::after {
+  border-color: var(--esd-border-strong);
+  border-radius: 0 6px 6px 0;
+}
+
+/* ---------- Botones (como .btn-primary del portal) ---------- */
+.pf-v5-c-button {
+  font-family: var(--esd-font);
+  font-weight: 600;
+  border-radius: 6px;
+}
+.pf-v5-c-button.pf-m-primary {
+  --pf-v5-c-button--m-primary--BackgroundColor: var(--esd-primary);
+  --pf-v5-c-button--m-primary--hover--BackgroundColor: var(--esd-primary-hover);
+  --pf-v5-c-button--m-primary--focus--BackgroundColor: var(--esd-primary-hover);
+  --pf-v5-c-button--m-primary--active--BackgroundColor: var(--esd-primary-active);
+  min-height: 44px;
+  font-size: 15px;
+}
+.pf-v5-c-button:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: 0 0 0 3px rgba(21, 89, 163, 0.3);
+}
+
+a,
+.pf-v5-c-button.pf-m-link {
+  color: var(--esd-primary);
+}
+a:hover,
+.pf-v5-c-button.pf-m-link:hover {
+  color: var(--esd-primary-hover);
+}
+
+/* Alertas con los colores del portal. */
+.pf-v5-c-alert {
+  border-radius: 6px;
+}
+
+/* ---------- Pie bajo la tarjeta ---------- */
+.pf-v5-c-login__container::after {
+  content: "Acceso exclusivo para personal y usuarios autorizados de Energuate.";
+  display: block;
+  text-align: center;
+  font-size: 12px;
+  color: var(--esd-text-subtle);
+  padding: 0 16px;
+}
+
+/* ---------- Móvil ---------- */
+@media (max-width: 575px) {
+  .login-pf body,
+  body#keycloak-bg {
+    background: linear-gradient(180deg, var(--esd-navy) 0, var(--esd-navy-2) 200px, var(--esd-bg) 200px) no-repeat;
+    background-color: var(--esd-bg);
+  }
+  .pf-v5-c-login {
+    padding: 32px 16px 24px;
+  }
+  .pf-v5-c-login__container {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 20px;
+  }
+  #kc-header-wrapper strong {
+    font-size: 19px;
+  }
+  #kc-header-wrapper::before {
+    width: 40px;
+    height: 40px;
+    font-size: 14px;
+  }
+  .pf-v5-c-login__main-header {
+    padding-top: 24px;
+  }
+}

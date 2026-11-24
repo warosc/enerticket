@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import CountBarChart, { type CountDatum } from '@/components/dashboard/CountBarChart';
 import { Icon } from '@/components/icons';
 import SlaBadge from '@/components/ticket/SlaBadge';
@@ -101,6 +101,9 @@ export default function DashboardPage() {
   }, [catalog, data]);
 
   const byCategory = data?.stats.by_category ?? {};
+  // Columnas de la rejilla de KPI según cuántas tarjetas hay (7 → 4 + 3, 6 → 3 + 3, 5 → 5).
+  const kpiCount = data ? 6 + (data.unassigned !== null ? 1 : 0) : 0;
+  const kpiCols = kpiCount === 6 ? 3 : kpiCount === 5 ? 5 : 4;
   const openCount = (byCategory.todo ?? 0) + (byCategory.in_progress ?? 0) + (byCategory.waiting ?? 0);
 
   return (
@@ -129,7 +132,11 @@ export default function DashboardPage() {
         <Loading label="Cargando indicadores…" />
       ) : data ? (
         <>
-          <section className="grid-auto" aria-label="Indicadores clave">
+          <section
+            className="kpi-grid"
+            aria-label="Indicadores clave"
+            style={{ '--kpi-cols': kpiCols } as CSSProperties}
+          >
             <Kpi label="Tickets visibles" value={data.stats.total} accent="primary" href="/tickets" />
             <Kpi
               label="Abiertos"
@@ -158,7 +165,7 @@ export default function DashboardPage() {
           </section>
 
           <div className="grid-2">
-            <CountBarChart title="Tickets por estado" subtitle="Según el flujo de trabajo" data={stateData} />
+            <CountBarChart title="Tickets por estado" subtitle="Según el flujo de trabajo" data={stateData} layout="horizontal" />
             <CountBarChart title="Tickets por prioridad" subtitle="Todas las categorías de estado" data={priorityData} />
           </div>
 
@@ -173,7 +180,7 @@ export default function DashboardPage() {
               <EmptyState title="No hay tickets todavía">Cree el primero desde «Nuevo ticket».</EmptyState>
             ) : (
               <div className="table-wrap">
-                <table className="table">
+                <table className="table table-stack">
                   <thead>
                     <tr>
                       <th scope="col">Clave</th>
@@ -190,7 +197,7 @@ export default function DashboardPage() {
                         <td className="col-key">
                           <Link href={`/tickets/${t.id}`}>{t.key}</Link>
                         </td>
-                        <td className="col-title">
+                        <td className="col-title cell-head">
                           <Link href={`/tickets/${t.id}`} style={{ color: 'inherit' }}>
                             {t.title}
                           </Link>
@@ -204,7 +211,9 @@ export default function DashboardPage() {
                         <td>
                           <SlaBadge ticket={t} />
                         </td>
-                        <td className="nowrap muted">{formatRelative(t.updated_at)}</td>
+                        <td className="nowrap muted" data-label="Actualizado">
+                          {formatRelative(t.updated_at)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

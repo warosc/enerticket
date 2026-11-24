@@ -123,7 +123,7 @@ function RulesTab({ meta, onOpenExecutions }: { meta: AutomationMeta; onOpenExec
           <Loading label="Cargando reglas…" />
         ) : rules && rules.length > 0 ? (
           <div className="table-wrap">
-            <table className="table">
+            <table className="table table-stack">
               <thead>
                 <tr>
                   <th className="col-num">Orden</th>
@@ -132,14 +132,14 @@ function RulesTab({ meta, onOpenExecutions }: { meta: AutomationMeta; onOpenExec
                   <th>Acciones</th>
                   <th className="col-num">Ejecuciones</th>
                   <th>Activa</th>
-                  <th aria-label="Opciones" />
+                  <th className="text-right">Opciones</th>
                 </tr>
               </thead>
               <tbody>
                 {rules.map((rule) => (
                   <tr key={rule.id}>
-                    <td className="col-num">{rule.order}</td>
-                    <td className="col-title">
+                    <td className="col-num" data-label="Orden">{rule.order}</td>
+                    <td className="col-title cell-head">
                       <div className="strong">{rule.name}</div>
                       <div className={styles.ruleSummary}>
                         {rule.conditions.rules.length === 0
@@ -150,9 +150,9 @@ function RulesTab({ meta, onOpenExecutions }: { meta: AutomationMeta; onOpenExec
                         {rule.stop_processing ? ' · detiene las siguientes' : ''}
                       </div>
                     </td>
-                    <td className="text-sm">{triggerLabel.get(rule.trigger) ?? rule.trigger}</td>
-                    <td className="text-sm">{rule.actions.map((a) => actionLabel.get(a.type) ?? a.type).join(', ')}</td>
-                    <td className="col-num">
+                    <td className="text-sm" data-label="Disparador">{triggerLabel.get(rule.trigger) ?? rule.trigger}</td>
+                    <td className="text-sm" data-label="Acciones">{rule.actions.map((a) => actionLabel.get(a.type) ?? a.type).join(', ')}</td>
+                    <td className="col-num" data-label="Ejecuciones">
                       <button type="button" className="btn btn-ghost btn-sm" onClick={() => onOpenExecutions(rule.id)} title="Ver ejecuciones">
                         {rule.execution_count}
                       </button>
@@ -162,7 +162,7 @@ function RulesTab({ meta, onOpenExecutions }: { meta: AutomationMeta; onOpenExec
                         </div>
                       )}
                     </td>
-                    <td>
+                    <td data-label="Activa">
                       <label className={styles.switch}>
                         <input
                           type="checkbox"
@@ -174,17 +174,24 @@ function RulesTab({ meta, onOpenExecutions }: { meta: AutomationMeta; onOpenExec
                         {rule.active ? 'Sí' : 'No'}
                       </label>
                     </td>
-                    <td className="nowrap">
-                      <div className="btn-group">
-                        <button type="button" className="btn btn-sm" onClick={() => setEditing(rule)}>
+                    <td className="nowrap text-right cell-actions">
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => setEditing(rule)}
+                          aria-label={`Editar ${rule.name}`}
+                          title="Editar regla"
+                        >
                           Editar
                         </button>
                         <button
                           type="button"
-                          className="btn btn-ghost btn-sm"
+                          className={`btn btn-ghost btn-sm ${styles.deleteBtn}`}
                           onClick={() => void remove(rule)}
                           disabled={busy === rule.id}
                           aria-label={`Eliminar ${rule.name}`}
+                          title="Eliminar regla"
                         >
                           <FlowIcon name="trash" width={14} height={14} />
                         </button>

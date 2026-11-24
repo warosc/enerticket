@@ -13,7 +13,9 @@ export type IconName =
   | 'menu'
   | 'logout'
   | 'plus'
-  | 'refresh';
+  | 'refresh'
+  | 'filter'
+  | 'chevronDown';
 
 const PATHS: Record<IconName, string[]> = {
   dashboard: ['M3 3h7v9H3z', 'M14 3h7v5h-7z', 'M14 12h7v9h-7z', 'M3 16h7v5H3z'],
@@ -36,6 +38,8 @@ const PATHS: Record<IconName, string[]> = {
   logout: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
   plus: ['M12 5v14', 'M5 12h14'],
   refresh: ['M21 12a9 9 0 1 1-2.6-6.4L21 8', 'M21 3v5h-5'],
+  filter: ['M3 5h18l-7 8.5V19l-4 2v-7.5z'],
+  chevronDown: ['m6 9 6 6 6-6'],
 };
 
 export function Icon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {

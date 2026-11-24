@@ -61,25 +61,47 @@ function eventDetail(event: SlaEvent): string | null {
   return parts.length ? parts.join(' · ') : null;
 }
 
+/**
+ * Relleno de la barra: % de tiempo hábil consumido mientras el reloj corre (verde/ámbar/rojo);
+ * llena en verde si la métrica se cumplió y llena en rojo si venció.
+ */
+function progressFor(info: SlaMetricInfo, tone: SlaTone): { pct: number; tone: SlaTone; caption: string } {
+  const consumed = consumedPct(info);
+  const rounded = Math.round(consumed);
+  if (info.status === 'cancelled') return { pct: 0, tone: 'cancelled', caption: 'Métrica cancelada' };
+  if (!info.open) {
+    if (info.breached || tone === 'breached') {
+      return { pct: 100, tone: 'breached', caption: `Finalizada fuera de objetivo · ${rounded} % del tiempo hábil` };
+    }
+    return { pct: 100, tone: 'ok', caption: `Cumplida · ${rounded} % del tiempo hábil usado` };
+  }
+  if (tone === 'breached') return { pct: 100, tone, caption: `Objetivo excedido · ${rounded} % del tiempo hábil` };
+  const base = `${rounded} % del tiempo hábil consumido`;
+  if (info.paused) return { pct: consumed, tone, caption: `${base} · reloj en pausa` };
+  if (consumed === 0) return { pct: 0, tone, caption: `${base} · el reloj avanza solo en horario hábil` };
+  return { pct: consumed, tone, caption: base };
+}
+
 function MetricBlock({ info }: { info: SlaMetricInfo }) {
   const tone = slaTone(info);
-  const pct = consumedPct(info);
+  const progress = progressFor(info, tone);
   const label = SLA_METRIC_LABELS[info.metric];
   return (
     <div className={styles.metric}>
       <div className={styles.metricHead}>
         <span className={styles.metricTitle}>{label}</span>
-        <span className={`badge ${TONE_BADGE_CLASS[tone]}`}>
+        <span className={`badge ${TONE_BADGE_CLASS[info.status === 'met' ? 'ok' : tone]}`}>
           {tone === 'warning' ? 'En riesgo' : SLA_STATUS_LABELS[info.status]}
         </span>
       </div>
       <div className={`${styles.metricMain} ${styles[`tone-${tone}`] ?? ''}`}>{remainingLabel(info)}</div>
       <SlaProgress
-        pct={pct}
-        tone={tone}
-        markerPct={info.warning_threshold_pct}
-        label={`${label}: ${Math.round(pct)} % del objetivo consumido`}
+        pct={progress.pct}
+        tone={progress.tone}
+        markerPct={info.open ? info.warning_threshold_pct : undefined}
+        label={`${label}: ${progress.caption}`}
       />
+      <div className={styles.progressCaption}>{progress.caption}</div>
       <dl className={styles.metricMeta}>
         <dt>Objetivo</dt>
         <dd>{formatTargetMinutes(info.target_minutes)} hábiles</dd>

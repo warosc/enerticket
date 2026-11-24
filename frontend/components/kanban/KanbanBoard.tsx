@@ -24,7 +24,7 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Icon } from '@/components/icons';
-import { Alert, EmptyState, ErrorAlert, Loading, PageHeader } from '@/components/ui';
+import { Alert, CollapsibleFilters, EmptyState, ErrorAlert, Loading, PageHeader } from '@/components/ui';
 import { apiFetch, errorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { formatNumber, formatRelative } from '@/lib/format';
@@ -44,7 +44,6 @@ import {
 import KanbanColumn, { type DropRole } from './KanbanColumn';
 import KanbanFilters from './KanbanFilters';
 import { KanbanCardOverlay } from './KanbanCard';
-import RealtimeIndicator from './RealtimeIndicator';
 import { useKanbanBoard } from './useKanbanBoard';
 import styles from './kanban.module.css';
 
@@ -236,7 +235,6 @@ export default function KanbanBoard() {
         subtitle="Arrastre los tickets entre columnas para cambiar su estado. Los cambios de otros usuarios aparecen en vivo."
         actions={
           <>
-            <RealtimeIndicator />
             <button
               type="button"
               className="btn btn-sm"
@@ -264,7 +262,7 @@ export default function KanbanBoard() {
       )}
 
       {catalog && (
-        <section className="panel" aria-label="Filtros">
+        <CollapsibleFilters activeCount={filterCount}>
           <KanbanFilters
             filters={filters}
             catalog={catalog}
@@ -273,7 +271,7 @@ export default function KanbanBoard() {
             canFilterByAssignee={isAgent}
             onChange={updateFilters}
           />
-        </section>
+        </CollapsibleFilters>
       )}
 
       {board.notices.length > 0 && (

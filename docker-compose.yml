@@ -126,6 +126,8 @@ services:
     volumes:
       - ./keycloak/realm-energuate.json:/opt/keycloak/data/import/realm-energuate.json:ro
       - ./keycloak/truststore:/opt/keycloak/conf/truststores:ro
+      # Tema de login propio (paleta del portal). start-dev ya desactiva la caché de temas.
+      - ./keycloak/themes/energuate:/opt/keycloak/themes/energuate:ro
     ports: ["127.0.0.1:8081:8080"]
     depends_on:
       keycloak-db: {condition: service_healthy}
