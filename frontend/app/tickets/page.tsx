@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '@/components/icons';
 import SlaBadge from '@/components/ticket/SlaBadge';
-import CreateTicketForm from '@/components/tickets/CreateTicketForm';
+import CreateTicketForm, { type FailedUpload } from '@/components/tickets/CreateTicketForm';
 import {
   Alert,
   CollapsibleFilters,
@@ -93,6 +93,7 @@ function TicketsView() {
   const filters = useMemo(() => parseFilters(new URLSearchParams(searchParams.toString())), [searchParams]);
   const [showCreate, setShowCreate] = useState(searchParams.get('new') === '1');
   const [created, setCreated] = useState<TicketOut | null>(null);
+  const [failedUploads, setFailedUploads] = useState<FailedUpload[]>([]);
   const [search, setSearch] = useState(filters.q);
   const debouncedSearch = useDebouncedValue(search.trim(), 400);
 
@@ -216,9 +217,10 @@ function TicketsView() {
     router.replace(pathname, { scroll: false });
   }
 
-  function handleCreated(ticket: TicketOut) {
+  function handleCreated(ticket: TicketOut, failedUploads: FailedUpload[]) {
     setShowCreate(false);
     setCreated(ticket);
+    setFailedUploads(failedUploads);
     void reload({ silent: true });
   }
 
@@ -259,6 +261,26 @@ function TicketsView() {
           }
         >
           Ticket <Link href={`/tickets/${created.id}`}>{created.key}</Link> creado correctamente.
+        </Alert>
+      )}
+      {created && failedUploads.length > 0 && (
+        <Alert
+          tone="warning"
+          title={`No se pudieron subir ${failedUploads.length === 1 ? '1 adjunto' : `${failedUploads.length} adjuntos`}`}
+          action={
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setFailedUploads([])}>
+              Cerrar
+            </button>
+          }
+        >
+          <ul>
+            {failedUploads.map((f, i) => (
+              <li key={`${f.name}-${i}`}>
+                {f.name}: {f.error}
+              </li>
+            ))}
+          </ul>
+          Puede volver a adjuntarlos desde el detalle de <Link href={`/tickets/${created.id}`}>{created.key}</Link>.
         </Alert>
       )}
 

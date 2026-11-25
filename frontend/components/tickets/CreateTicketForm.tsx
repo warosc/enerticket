@@ -1,16 +1,41 @@
 'use client';
 
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from 'react';
+import styles from '@/components/reports/attachments.module.css';
 import { Alert } from '@/components/ui';
 import { apiFetch, errorMessage } from '@/lib/api';
+import {
+  FALLBACK_ATTACHMENT_SETTINGS,
+  acceptAttribute,
+  extensionOf,
+  fetchAttachmentSettings,
+  formatBytes,
+  precheckAttachment,
+  uploadAttachment,
+  type AttachmentSettings,
+} from '@/lib/attachments';
 import { useAuth } from '@/lib/auth';
 import { categoriesFor, categoryAllowsType, providersFor, ticketDepartments } from '@/lib/catalog';
 import type { Catalog, TicketChannel, TicketCreate, TicketOut } from '@/lib/types';
 import CategoryFields, { type CategoryValue } from './CategoryFields';
 
+/** Archivo elegido en el alta, pendiente de subir cuando exista el ticket. */
+interface PendingFile {
+  id: number;
+  file: File;
+  error: string | null;
+}
+
+/** Adjunto que no se pudo subir tras crear el ticket. */
+export interface FailedUpload {
+  name: string;
+  error: string;
+}
+
 /**
  * Alta de ticket: tipo → departamento de atención (solo los que atienden tickets) → categoría
  * (filtrada por departamento y tipo) → subcategoría. Los agentes indican además canal y proveedor.
+ * Los adjuntos se suben uno a uno justo después de crear el ticket (la API los asocia a su id).
  */
 export default function CreateTicketForm({
   catalog,
@@ -18,7 +43,7 @@ export default function CreateTicketForm({
   onCancel,
 }: {
   catalog: Catalog;
-  onCreated: (ticket: TicketOut) => void;
+  onCreated: (ticket: TicketOut, failedUploads: FailedUpload[]) => void;
   onCancel: () => void;
 }) {
   const { user, isAgent } = useAuth();
@@ -44,7 +69,64 @@ export default function CreateTicketForm({
   const [channel, setChannel] = useState<TicketChannel>(defaultChannel);
   const [providerId, setProviderId] = useState<number | ''>('');
   const [submitting, setSubmitting] = useState(false);
+  const [progressLabel, setProgressLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const [attachmentSettings, setAttachmentSettings] = useState<AttachmentSettings>(FALLBACK_ATTACHMENT_SETTINGS);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const fileSeq = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchAttachmentSettings().then((s) => {
+      if (!cancelled) setAttachmentSettings(s);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function addFiles(list: FileList | null) {
+    if (!list || list.length === 0) return;
+    const incoming = Array.from(list);
+    const room = Math.max(0, attachmentSettings.max_per_ticket - files.length);
+    const accepted = incoming.slice(0, room).map((file) => ({
+      id: ++fileSeq.current,
+      file,
+      error: precheckAttachment(file, attachmentSettings),
+    }));
+    setFiles((prev) => [...prev, ...accepted]);
+    if (incoming.length > room) {
+      setError(`Se permiten como máximo ${attachmentSettings.max_per_ticket} adjuntos por ticket.`);
+    }
+    if (fileInput.current) fileInput.current.value = '';
+  }
+
+  function removeFile(id: number) {
+    setFiles((prev) => prev.filter((f) => f.id !== id));
+  }
+
+  function onDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragging(false);
+    if (!submitting) addFiles(event.dataTransfer.files);
+  }
+
+  function onDragOver(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    if (submitting) return;
+    event.dataTransfer.dropEffect = 'copy';
+    setDragging(true);
+  }
+
+  function onDropzoneKey(event: KeyboardEvent<HTMLDivElement>) {
+    if (submitting) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      fileInput.current?.click();
+    }
+  }
 
   const departmentTeamIds = useMemo(
     () => new Set(catalog.teams.filter((t) => t.department_id === departmentId).map((t) => t.id)),
@@ -95,7 +177,12 @@ export default function CreateTicketForm({
       setError('Seleccione el departamento que atenderá el ticket.');
       return;
     }
+    if (files.some((f) => f.error)) {
+      setError('Quite los adjuntos marcados con error antes de crear el ticket.');
+      return;
+    }
     setSubmitting(true);
+    setProgressLabel('Creando…');
     setError(null);
     const payload: TicketCreate = {
       title: title.trim(),
@@ -111,14 +198,29 @@ export default function CreateTicketForm({
       payload.channel = channel;
       payload.provider_id = providerId === '' ? null : providerId;
     }
+    let ticket: TicketOut;
     try {
-      const ticket = await apiFetch<TicketOut>('/tickets', { method: 'POST', body: payload });
-      onCreated(ticket);
+      ticket = await apiFetch<TicketOut>('/tickets', { method: 'POST', body: payload });
     } catch (e) {
       setError(errorMessage(e));
-    } finally {
       setSubmitting(false);
+      setProgressLabel(null);
+      return;
     }
+    // El ticket ya existe: un adjunto fallido no lo deshace; se informa y puede reintentarse
+    // desde el panel de adjuntos del detalle.
+    const failed: FailedUpload[] = [];
+    for (const [index, pending] of files.entries()) {
+      setProgressLabel(`Subiendo adjuntos (${index + 1} de ${files.length})…`);
+      try {
+        await uploadAttachment(ticket.id, pending.file);
+      } catch (e) {
+        failed.push({ name: pending.file.name, error: errorMessage(e) });
+      }
+    }
+    setSubmitting(false);
+    setProgressLabel(null);
+    onCreated(ticket, failed);
   }
 
   return (
@@ -277,13 +379,79 @@ export default function CreateTicketForm({
             </label>
           </>
         )}
+        <div className="field field-full">
+          <span className="field-label" id="create-ticket-attachments">
+            Adjuntos
+          </span>
+          <div
+            role="button"
+            tabIndex={submitting ? -1 : 0}
+            aria-labelledby="create-ticket-attachments"
+            aria-describedby="create-ticket-attachments-hint"
+            aria-disabled={submitting}
+            className={`${styles.dropzone} ${dragging ? styles.dropzoneActive : ''} ${submitting ? styles.dropzoneDisabled : ''}`}
+            onClick={() => {
+              if (!submitting) fileInput.current?.click();
+            }}
+            onKeyDown={onDropzoneKey}
+            onDragOver={onDragOver}
+            onDragEnter={onDragOver}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+          >
+            <div className="strong">{dragging ? 'Suelte los archivos aquí' : 'Arrastre archivos o haga clic para seleccionar'}</div>
+            <div className="text-xs" id="create-ticket-attachments-hint">
+              Capturas, documentos, hojas de cálculo o comprimidos · máx. {attachmentSettings.max_mb} MB por archivo
+            </div>
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              hidden
+              accept={acceptAttribute(attachmentSettings)}
+              onChange={(e) => addFiles(e.target.files)}
+            />
+          </div>
+          {files.length > 0 && (
+            <ul className={styles.fileList} aria-label="Adjuntos seleccionados">
+              {files.map((f) => (
+                <li key={f.id} className={styles.fileItem}>
+                  <span className={styles.fileIcon} aria-hidden="true">
+                    {extensionOf(f.file.name).slice(0, 4) || 'file'}
+                  </span>
+                  <div className={styles.fileMain}>
+                    <div className={styles.fileName} title={f.file.name}>
+                      {f.file.name}
+                    </div>
+                    {f.error ? (
+                      <div className="field-error">{f.error}</div>
+                    ) : (
+                      <div className={styles.fileMeta}>{formatBytes(f.file.size)}</div>
+                    )}
+                  </div>
+                  <div className={styles.fileActions}>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      disabled={submitting}
+                      onClick={() => removeFile(f.id)}
+                      aria-label={`Quitar ${f.file.name}`}
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
       <div className="form-actions">
         <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={submitting}>
           Cancelar
         </button>
         <button type="submit" className="btn btn-primary" disabled={submitting || departments.length === 0}>
-          {submitting ? 'Creando…' : 'Crear ticket'}
+          {submitting ? (progressLabel ?? 'Creando…') : 'Crear ticket'}
         </button>
       </div>
     </form>
