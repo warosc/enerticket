@@ -21,3 +21,4 @@ backups/
 # Reportes/exportaciones de trabajo con datos personales: nunca al repo.
 *.xlsx
 *.xls
+.opencode
